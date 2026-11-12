@@ -72,7 +72,8 @@ assert.equal(mem.getItem(S.SAVE_KEY + '-backup'), '{坏掉的');
 // v1 老存档（没有装备字段）要能正常加载
 mem.setItem(S.SAVE_KEY, JSON.stringify({ v: 1, scrap: 50, buildings: { hq: 2, armory: 1 }, survivors: ['老王'] }));
 const v1 = S.load(mem);
-assert.equal(v1.v, 2);
+assert.equal(v1.v, 3);
+assert.deepEqual(v1.story, { done: 0 });
 assert.deepEqual(v1.bag, []);
 assert.deepEqual(v1.gear, { head: null, body: null, acc: null });
 assert.equal(v1.survivors[0], '老王');

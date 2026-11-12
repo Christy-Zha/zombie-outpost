@@ -1,5 +1,6 @@
 // 存档与经济系统（纯逻辑，不依赖画面，可以单独用 node 测试）
 import { BUILDINGS, WEAPONS, ZONES, SAVE_V, SURVIVOR_NAMES, STORE_HOURS, GEAR_SLOTS, RARITIES, GEAR_STATS, BAG_SIZE } from './data.js';
+import { CHAPTERS } from './story.js';
 
 export const SAVE_KEY = 'zombie-outpost-save';
 const B = Object.fromEntries(BUILDINGS.map(b => [b.key, b]));
@@ -24,6 +25,7 @@ export function defaultSave(now = Date.now()) {
     bag: [],                                  // 背包里的装备
     gear: { head: null, body: null, acc: null }, // 已穿戴装备的 id
     nextItemId: 1,
+    story: { done: 0 },   // 已完成的剧情章节数
   };
 }
 
@@ -43,6 +45,9 @@ export function migrate(d, now = Date.now()) {
   for (const k of Object.keys(s.gear)) if (s.gear[k] !== null && !s.bag.some(it => it.id === s.gear[k])) s.gear[k] = null;
   if (typeof s.nextItemId !== 'number') s.nextItemId = s.bag.reduce((m, it) => Math.max(m, it.id + 1), 1);
   if (typeof s.stats.bossKills !== 'number') s.stats.bossKills = 0;
+  // v2 → v3：补上剧情进度
+  s.story = { ...def.story, ...(d.story || {}) };
+  s.story.done = Math.max(0, Math.min(CHAPTERS.length, s.story.done | 0));
   if (!WEAPONS[s.weapon]) s.weapon = 'pistol';
   if (typeof s.lastTick !== 'number') s.lastTick = now;
   s.cleared = Math.max(0, Math.min(ZONES.length, s.cleared | 0));
@@ -175,6 +180,7 @@ export function rollRarity(zoneIndex, rnd = Math.random) {
 function statValue(key, zoneIndex, rarity, rnd) {
   const st = GEAR_STATS[key];
   const v = st.base * RARITIES[rarity].mult * (st.zone ? 1 + 0.6 * zoneIndex : 1) * (0.85 + rnd() * 0.3);
+  if (key === 'hp') return Math.round(v); // 生命取整，好看一些
   return st.pct ? Math.round(v * 1000) / 1000 : Math.round(v * 10) / 10;
 }
 
@@ -237,7 +243,19 @@ export const weaponUnlocked = (s, key) => s.buildings.armory >= WEAPONS[key].arm
 export function applyResult(s, r) {
   const zone = ZONES[r.zoneIndex];
   let bonus = 0, firstClear = false;
-  if (r.win) {
+  const isStory = r.story !== null && r.story !== undefined;
+  let storyFirst = false, storyJoin = null;
+  if (isStory && r.win) {
+    // 剧情章节：首次通关给全额奖励和同伴，重玩给 30%
+    const ch = CHAPTERS[r.story];
+    storyFirst = r.story === s.story.done;
+    bonus = storyFirst ? ch.reward.scrap : Math.round(ch.reward.scrap * 0.3);
+    if (storyFirst) {
+      s.story.done++;
+      const nm = ch.reward.survivor;
+      if (nm && !s.survivors.includes(nm)) { s.survivors.push(nm); storyJoin = nm; } // 剧情同伴不占宿舍名额限制
+    }
+  } else if (r.win) {
     bonus = Math.round(100 * zone.reward);
     if (r.zoneIndex === s.cleared && s.cleared < ZONES.length) {
       s.cleared++;
@@ -270,5 +288,5 @@ export function applyResult(s, r) {
   s.stats.runs++;
   s.stats.kills += r.kills;
   s.stats.best[r.zoneIndex] = Math.max(s.stats.best[r.zoneIndex] || 0, Math.floor(r.time));
-  return { bonus, firstClear, joined, extraFood, item, itemScrap };
+  return { bonus, firstClear, joined, extraFood, item, itemScrap, storyFirst, storyJoin };
 }

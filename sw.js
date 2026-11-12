@@ -1,10 +1,11 @@
 // 离线缓存：先用缓存秒开，同时后台悄悄更新，下次打开就是新版本
 // 发布新版本时，把 CACHE 的版本号 +1
-const CACHE = 'zombie-outpost-v4';
+const CACHE = 'zombie-outpost-v5';
 const ASSETS = [
   './', './index.html', './style.css', './manifest.webmanifest',
   './js/main.js', './js/data.js', './js/save.js', './js/battle.js', './js/base.js', './js/util.js', './js/sfx.js',
-  './vendor/three.module.min.js',
+  './js/story.js', './js/models.js',
+  './vendor/three.module.min.js', './vendor/GLTFLoader.js', './vendor/SkeletonUtils.js', './vendor/utils/BufferGeometryUtils.js',
   './icons/icon-180.png', './icons/icon-192.png', './icons/icon-512.png',
 ];
 
@@ -22,7 +23,9 @@ self.addEventListener('activate', e => {
 
 self.addEventListener('fetch', e => {
   const req = e.request;
-  if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
+  const url = new URL(req.url);
+  if (req.method !== 'GET' || url.origin !== location.origin) return;
+  if (/\/(tools|_model_research|models_src)\//.test(url.pathname)) return; // 开发用的文件不缓存
   e.respondWith(caches.open(CACHE).then(async cache => {
     const hit = await cache.match(req, { ignoreSearch: true });
     const net = fetch(req).then(res => {

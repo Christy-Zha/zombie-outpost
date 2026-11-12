@@ -4,6 +4,7 @@ import * as THREE from '../vendor/three.module.min.js';
 import { WEAPONS, ZOMBIES, ZONES, SKILLS, BATTLE_TIME, BOSS_TIME } from './data.js';
 import { rand, clamp, mergeColored, zombieGeometry, personGroup, groundTexture, disposeScene, box, cyl } from './util.js';
 import { sfx } from './sfx.js';
+import { hasModel, Rig, RigPool } from './models.js';
 
 const BOUND = 75;                       // 地图半径
 const MAXZ = 360, MAXB = 500, MAXG = 500, MAXL = 160, MAXP = 400; // 各类物体上限
@@ -32,7 +33,8 @@ function compact(arr) {
 }
 
 export class Battle {
-  constructor({ zoneIndex, weaponKey, stats, cb }) {
+  constructor({ zoneIndex, weaponKey, stats, cb, story = null }) {
+    this.story = story; // 剧情模式配置（null = 普通割草出征）
     this.zoneIndex = zoneIndex;
     this.zone = ZONES[zoneIndex];
     this.w = WEAPONS[weaponKey] || WEAPONS.pistol;
@@ -46,6 +48,12 @@ export class Battle {
     this.input = { x: 0, z: 0 };
     this.aimIn = { x: 0, z: 0, on: false }; // 手动瞄准（右摇杆）
     this.bossKilled = false;
+    // 用真实模型时同屏丧尸要少一些（每只都有骨骼动画，手机吃不消几百只）
+    this.useRigs = hasModel('zombie');
+    this.maxZ = story ? story.maxAlive : this.useRigs ? 45 : MAXZ;
+    this.ammo = story ? story.ammo : Infinity;
+    this.noAmmoMsg = 0;
+    this.objs = []; this.objGot = 0; this.exit = null; this.corpses = [];
     this.zs = []; this.bullets = []; this.gems = []; this.loot = []; this.parts = []; this.fires = []; this.saws = [];
     this.nid = 1; this.spawnAcc = 0; this.nextHorde = 60; this.nextBeacon = 35;
     this.bossSpawned = false; this.boss = null; this.beacon = null;
@@ -75,11 +83,20 @@ export class Battle {
     const Z = this.zone;
     const s = this.scene = new THREE.Scene();
     const fog = new THREE.Color(Z.fog);
+    if (this.story) fog.setHex(0x06080b); // 剧情模式：深夜
     s.background = fog;
     s.fog = new THREE.Fog(fog, 30, 60);
     this.camera = new THREE.PerspectiveCamera(55, 1, 0.5, 120);
-    s.add(new THREE.HemisphereLight(0xdfe6d0, 0x40382c, 1.6));
-    const sun = new THREE.DirectionalLight(0xffeedd, 1.8);
+    const night = !!this.story;
+    s.add(new THREE.HemisphereLight(night ? 0x6a7aa8 : 0xdfe6d0, 0x40382c, night ? 0.55 : 1.6));
+    const sun = new THREE.DirectionalLight(night ? 0x8fa4d8 : 0xffeedd, night ? 0.3 : 1.8);
+    if (night) {
+      // 手电筒（跟着角色朝向）+ 身边一圈微光
+      this.torch = new THREE.SpotLight(0xfff0d0, 90, 30, 0.6, 0.55, 1.2);
+      s.add(this.torch, this.torch.target);
+      this.glow = new THREE.PointLight(0xffd9a0, 8, 8, 1.5);
+      s.add(this.glow);
+    }
     sun.position.set(6, 20, 8);
     s.add(sun);
 
@@ -95,6 +112,8 @@ export class Battle {
     // 玩家
     this.player = personGroup({ shirt: 0x2f6fdb });
     s.add(this.player);
+    if (hasModel('player')) { this.pRig = new Rig('player', 1.8); s.add(this.pRig.group); this.player.visible = false; this.pRig.play('idle'); }
+    if (this.useRigs) this.pools = { zombie: new RigPool(s, 'zombie', 1.8), mutant: hasModel('mutant') ? new RigPool(s, 'mutant', 1.8) : null };
     const blobGeo = new THREE.CircleGeometry(0.5, 14).rotateX(-Math.PI / 2);
     const blobMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.3, depthWrite: false });
     this.pShadow = new THREE.Mesh(blobGeo, blobMat);
@@ -137,6 +156,86 @@ export class Battle {
     this.aimLine = new THREE.Mesh(lg, new THREE.MeshBasicMaterial({ color: 0xff3b30, transparent: true, opacity: 0.55, depthWrite: false, blending: THREE.AdditiveBlending }));
     this.aimLine.visible = false;
     s.add(this.aimLine);
+    if (this.story) this.buildStory();
+  }
+
+  // ---------- 剧情：任务物品 + 撤离点 ----------
+  buildStory() {
+    const st = this.story, s = this.scene;
+    const itemGeo = new THREE.BoxGeometry(0.6, 0.6, 0.6);
+    const itemMat = new THREE.MeshBasicMaterial({ color: 0xffd23f });
+    const beamGeo = new THREE.CylinderGeometry(0.35, 0.35, 8, 10, 1, true);
+    this.beamMat = new THREE.MeshBasicMaterial({ color: 0xffd23f, transparent: true, opacity: 0.25, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
+    for (let k = 0, tries = 0; k < st.obj.count && tries < 500; tries++) {
+      const a = Math.random() * TAU, r = rand(18, 42);
+      const x = Math.sin(a) * r, z = Math.cos(a) * r;
+      if (this.inCollider(x, z) || this.objs.some(o => (o.x - x) ** 2 + (o.z - z) ** 2 < 15 * 15)) continue;
+      const g = new THREE.Group();
+      const m = new THREE.Mesh(itemGeo, itemMat); m.position.y = 0.6;
+      const beam = new THREE.Mesh(beamGeo, this.beamMat); beam.position.y = 4;
+      g.add(m, beam); g.position.set(x, 0, z); s.add(g);
+      this.objs.push({ x, z, g, m, got: false });
+      // 物品旁边埋伏几只丧尸
+      for (let i = 0; i < 3 + this.zoneIndex; i++) this.pendingLurkers = (this.pendingLurkers || []).concat([[x + rand(-5, 5), z + rand(-5, 5)]]);
+      k++;
+    }
+  }
+
+  spawnExit() {
+    const p = this.p;
+    for (let tries = 0; tries < 60; tries++) {
+      const a = Math.random() * TAU, r = rand(24, 34);
+      const x = clamp(p.x + Math.sin(a) * r, -BOUND + 5, BOUND - 5), z = clamp(p.z + Math.cos(a) * r, -BOUND + 5, BOUND - 5);
+      if (this.inCollider(x, z)) continue;
+      const g = new THREE.Group();
+      const mat = new THREE.MeshBasicMaterial({ color: 0x5dff8a, transparent: true, opacity: 0.3, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
+      const beam = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 1.4, 14, 16, 1, true), mat); beam.position.y = 7;
+      const ring = new THREE.Mesh(new THREE.RingGeometry(1.6, 2, 32).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0x5dff8a })); ring.position.y = 0.05;
+      g.add(beam, ring); g.position.set(x, 0, z); this.scene.add(g);
+      this.exit = { x, z, g };
+      return;
+    }
+  }
+
+  updateStory(dt) {
+    const st = this.story, p = this.p;
+    if (this.pendingLurkers) { for (const [x, z] of this.pendingLurkers) this.spawnZombie('walker', x, z); this.pendingLurkers = null; }
+    let target = null, best = Infinity;
+    for (const o of this.objs) {
+      if (o.got) continue;
+      o.m.rotation.y += dt * 2;
+      o.m.position.y = 0.6 + Math.sin(this.t * 3) * 0.12;
+      const d = Math.hypot(o.x - p.x, o.z - p.z);
+      if (d < 1.6) {
+        o.got = true; this.objGot++;
+        this.scene.remove(o.g);
+        this.burst(o.x, 1, o.z, 20, 0xffd23f, 5, 0.15);
+        sfx.play('rescue');
+        this.cb.onMsg(`${st.obj.icon} 找到${st.obj.name}（${this.objGot}/${st.obj.count}）`);
+        if (this.objGot >= st.obj.count) {
+          if (st.boss) {
+            const a = Math.random() * TAU;
+            this.boss = this.spawnZombie('boss', p.x + Math.sin(a) * 16, p.z + Math.cos(a) * 16);
+            sfx.play('boss'); this.shake = 0.5;
+            this.cb.onMsg(st.bossMustDie ? '☠️ 它来了！击败它才能离开！' : '☠️ 有什么东西追上来了……快去撤离点！');
+          } else this.cb.onMsg('🚁 全部找到！前往绿色撤离点！');
+          this.spawnExit();
+        }
+      } else if (d < best) { best = d; target = o; }
+    }
+    if (!target && this.exit) target = this.exit;
+    // 箭头指向最近的目标
+    this.arrow.visible = !!target && Math.hypot(target.x - p.x, target.z - p.z) > 4;
+    if (this.arrow.visible) {
+      const dx = target.x - p.x, dz = target.z - p.z, d = Math.hypot(dx, dz);
+      this.arrow.position.set(p.x + dx / d * 1.9, 0.35, p.z + dz / d * 1.9);
+      this.arrow.rotation.y = Math.atan2(dx, dz);
+      this.arrow.material.color.setHex(target === this.exit ? 0x5dff8a : 0xffd23f);
+    }
+    if (this.exit && Math.hypot(this.exit.x - p.x, this.exit.z - p.z) < 2.2) {
+      if (st.bossMustDie && this.boss) { if (this.t - (this.exitMsgT || 0) > 3) { this.exitMsgT = this.t; this.cb.onMsg('☠️ 先解决它！'); } }
+      else this.end(true);
+    }
   }
 
   addCollider(x, z, r) {
@@ -241,8 +340,8 @@ export class Battle {
     this.camera.fov = portrait ? 52 : 45;
     this.camOff.set(0, portrait ? 18 : 15, portrait ? 13 : 11);
     const L = this.camOff.length();
-    this.scene.fog.near = L + 3;
-    this.scene.fog.far = L + 32;
+    this.scene.fog.near = this.story ? L - 4 : L + 3;
+    this.scene.fog.far = this.story ? L + 14 : L + 32;
     this.camera.updateProjectionMatrix();
   }
 
@@ -293,7 +392,7 @@ export class Battle {
     this.updateMolotov(dt);
     this.updatePickups(dt);
     this.updateParticles(dt);
-    this.updateBeacon(dt);
+    if (this.story) this.updateStory(dt); else this.updateBeacon(dt);
     this.updateSpawns(dt);
     compact(this.zs);
     compact(this.bullets);
@@ -304,7 +403,8 @@ export class Battle {
     if (this.hudAcc <= 0) { this.hudAcc = 0.1; this.cb.onHud(this.hudData()); }
 
     if (p.hp <= 0) { p.hp = 0; this.cb.onHud(this.hudData()); this.end(false); return; }
-    if (this.t >= BATTLE_TIME) { this.end(true); return; }
+    if (!this.story && this.t >= BATTLE_TIME) { this.end(true); return; }
+    if (this.over) return;
     if (this.pendingLevels > 0) {
       this.paused = true;
       sfx.play('level');
@@ -318,6 +418,8 @@ export class Battle {
       hp: p.hp, maxHp: p.maxHp, xp: this.xp, need: this.need(this.level + this.pendingLevels), level: this.level,
       left: Math.max(0, BATTLE_TIME - this.t), kills: this.kills, scrap: Math.floor(this.scrap), rescued: this.rescued,
       boss: this.boss ? this.boss.hp / this.boss.maxHp : -1,
+      story: !!this.story, t: this.t, ammo: this.ammo, bossName: (this.story && this.story.bossName) || '尸王',
+      obj: this.story ? (this.objGot < this.story.obj.count ? `${this.story.obj.icon} ${this.story.obj.name} ${this.objGot}/${this.story.obj.count}` : (this.story.bossMustDie && this.boss ? '☠️ 击败它' : '🚁 前往撤离点')) : '',
     };
   }
 
@@ -368,6 +470,12 @@ export class Battle {
       if (!tgt) { p.fireCd = 0; return; }
       base = Math.atan2(tgt.x - p.x, tgt.z - p.z);
     }
+    if (this.ammo <= 0) {
+      p.fireCd = 0.3;
+      if (this.t - this.noAmmoMsg > 4) { this.noAmmoMsg = this.t; this.cb.onMsg('🔫 没子弹了！去找绿色弹药箱'); }
+      return;
+    }
+    this.ammo--;
     p.fireCd = 1 / this.rate;
     p.aim = base; p.aimT = 0.5;
     const n = this.count;
@@ -404,6 +512,10 @@ export class Battle {
       if (z.flash > 0) z.flash -= dt;
       z.sawCd -= dt;
       const hr = 0.45 + z.r;
+      if (z.rig) {
+        if (d < hr + 0.9 && z.rig.has('attack')) z.rig.play('attack', { speed: 1.2 });
+        else z.rig.play(z.type === 'runner' && z.rig.has('run') ? 'run' : 'walk', { speed: z.animSpd });
+      }
       if (d < hr + 0.15 && p.invuln <= 0) this.hurtPlayer(z.dmg);
       if (d < hr) { z.x = p.x - dx * hr; z.z = p.z - dz * hr; }
     }
@@ -442,6 +554,7 @@ export class Battle {
     if (z.dead) return;
     z.hp -= dmg;
     z.flash = 0.1;
+    if (z.rig) z.rig.flash(0.08);
     if (kx || kz) {
       const l = Math.hypot(kx, kz) || 1;
       z.kx += kx / l * kb / z.m;
@@ -453,6 +566,15 @@ export class Battle {
   kill(z) {
     z.dead = true;
     this.kills++;
+    if (z.rig) { // 播放倒地动作，过一会儿淡出再回收
+      if (z.rig.has('death')) z.rig.play('death', { once: true, fade: 0.1 });
+      this.corpses.push({ rig: z.rig, pool: z.pool, t: 2.4 });
+      z.rig = null;
+    }
+    if (this.story) {
+      if (Math.random() < 0.22) this.dropLoot('ammo', z.x + rand(-0.4, 0.4), z.z + rand(-0.4, 0.4), this.story.ammoPack);
+      if (Math.random() < 0.03) this.dropLoot('med', z.x, z.z, 0.3);
+    }
     const d = z.def, big = z.type === 'boss';
     this.burst(z.x, 0.9 * z.s, z.z, big ? 40 : 6, 0x6a8f3a, 5, 0.16 * z.s);
     this.burst(z.x, 0.9 * z.s, z.z, big ? 20 : 3, 0x7a1f1f, 4, 0.14 * z.s);
@@ -603,7 +725,8 @@ export class Battle {
     };
     step(this.gems, g => this.gainXp(g.v), this.pickR ** 2);
     step(this.loot, g => {
-      if (g.kind === 'med') { p.hp = Math.min(p.maxHp, p.hp + p.maxHp * g.v); this.cb.onMsg('+ 医疗包'); sfx.play('rescue'); }
+      if (g.kind === 'ammo') { this.ammo += g.v; this.cb.onMsg(`+${g.v} 发子弹`); sfx.play('coin'); }
+      else if (g.kind === 'med') { p.hp = Math.min(p.maxHp, p.hp + p.maxHp * g.v); this.cb.onMsg('+ 医疗包'); sfx.play('rescue'); }
       else { this.scrap += g.v; sfx.play('coin'); }
     }, (this.pickR * 1.6) ** 2); // 物资的吸取范围更大
   }
@@ -697,23 +820,45 @@ export class Battle {
       r: 0.42 * s, s, m: type === 'boss' ? 40 : s * s, tr: tint.r, tg: tint.g, tb: tint.b,
       flash: 0, phase: rand(0, 6), kx: 0, kz: 0, sawCd: 0, ang: 0, dead: false,
     };
+    if (this.story) { zb.hp *= this.story.hp; zb.maxHp = zb.hp; zb.spd *= 0.85; zb.dmg *= 1.3; }
+    zb.animSpd = zb.spd / d.spd; // 走得快的丧尸动画也播快一点
+    if (this.pools) {
+      const big = (type === 'brute' || type === 'boss') && this.pools.mutant;
+      zb.pool = big ? this.pools.mutant : this.pools.zombie;
+      zb.rig = zb.pool.get();
+      zb.rig.group.scale.setScalar(big ? s / 1.5 : s);
+      zb.rig.group.position.set(x, 0, z);
+      zb.rig.play('walk', { fade: 0, speed: zb.animSpd });
+      if (zb.rig.cur) zb.rig.cur.time = Math.random() * zb.rig.cur.getClip().duration; // 步伐错开
+    }
     this.zs.push(zb);
     return zb;
   }
 
   updateSpawns(dt) {
     const t = this.t, zi = this.zoneIndex, p = this.p;
+    if (this.story) { // 剧情：丧尸少但持续出现，从黑暗里冒出来
+      this.spawnAcc += dt * this.story.spawn * (1 + t / 240);
+      while (this.spawnAcc >= 1) {
+        this.spawnAcc -= 1;
+        if (this.zs.length < this.maxZ) {
+          const a = Math.random() * TAU, r = rand(15, 22);
+          this.spawnZombie(this.pickType(), p.x + Math.sin(a) * r, p.z + Math.cos(a) * r);
+        }
+      }
+      return;
+    }
     const rate = (0.7 + t / 60 * 0.9) * (1 + zi * 0.12);
     this.spawnAcc += dt * rate;
     while (this.spawnAcc >= 1) {
       this.spawnAcc -= 1;
-      if (this.zs.length < MAXZ - 20) this.spawnZombie(this.pickType());
+      if (this.zs.length < this.maxZ - (this.useRigs ? 0 : 20)) this.spawnZombie(this.pickType());
     }
     // 每分钟一波尸潮，从四面八方包围
     if (t >= this.nextHorde && t < BATTLE_TIME - 5) {
       this.nextHorde += 60;
       const n = 14 + zi * 4;
-      for (let i = 0; i < n && this.zs.length < MAXZ - 5; i++) {
+      for (let i = 0; i < n && this.zs.length < this.maxZ - 5; i++) {
         const a = i / n * TAU;
         this.spawnZombie('walker', p.x + Math.sin(a) * 20, p.z + Math.cos(a) * 20);
       }
@@ -765,9 +910,12 @@ export class Battle {
     this.loot.length = 0;
     if (win) sfx.play('win');
     else if (!retreat) sfx.play('lose');
+    this.cb.onHud(this.hudData()); // 刷新一次，Boss 血条等及时消失
     this.cb.onEnd({
       win, retreat, zoneIndex: this.zoneIndex, time: this.t, kills: this.kills,
       scrap: Math.floor(this.scrap), rescued: this.rescued, level: this.level, bossKilled: this.bossKilled,
+      story: this.story ? this.story.index : null,
+      bossName: (this.story && this.story.bossName) || '尸王',
     });
   }
 
@@ -792,6 +940,24 @@ export class Battle {
     u.gun.position.z = 0.62 - p.recoil * 0.12;
     pl.visible = !(p.invuln > 0 && !this.over && Math.floor(p.invuln * 20) % 2 === 0);
     this.pShadow.position.set(p.x, 0.02, p.z);
+    if (this.pRig) {
+      const r = this.pRig;
+      r.group.position.set(p.x, 0, p.z);
+      r.group.rotation.y = p.face;
+      r.group.visible = pl.visible || this.over; // 受伤闪烁沿用同一套逻辑
+      pl.visible = false; // 有真实模型就隐藏方块人
+      if (p.hp <= 0 && r.has('death')) r.play('death', { once: true, fade: 0.15 });
+      else if (p.moving) r.play('run', { speed: (this.speed / 6) });
+      else if (p.aimT > 0 && r.has('shoot')) r.play('shoot');
+      else r.play('idle');
+      if (live || p.hp <= 0) r.update(dt);
+    }
+    if (this.torch) {
+      const fx = Math.sin(p.face), fz = Math.cos(p.face);
+      this.torch.position.set(p.x + fx * 0.3, 2.2, p.z + fz * 0.3);
+      this.torch.target.position.set(p.x + fx * 9, 0, p.z + fz * 9);
+      this.glow.position.set(p.x, 2.5, p.z);
+    }
     const al = this.aimLine;
     al.visible = this.aimIn.on && !this.over;
     if (al.visible) {
@@ -802,16 +968,23 @@ export class Battle {
 
     // 丧尸
     const zm = this.zMesh, sh = this.shMesh, c = this.tmpC;
-    let i = 0;
+    let i = 0, zi = 0;
     for (const z of this.zs) {
-      const bob = Math.abs(Math.sin(z.phase)) * 0.06 * z.s;
-      D.position.set(z.x, bob, z.z);
-      D.rotation.set(z.type === 'runner' ? 0.35 : 0.12, z.ang, Math.sin(z.phase) * 0.12);
-      D.scale.setScalar(z.s);
-      D.updateMatrix();
-      zm.setMatrixAt(i, D.matrix);
-      if (z.flash > 0) c.setRGB(2.6, 2.6, 2.6); else c.setRGB(z.tr, z.tg, z.tb);
-      zm.setColorAt(i, c);
+      if (z.rig) {
+        z.rig.group.position.set(z.x, 0, z.z);
+        z.rig.group.rotation.y = z.ang;
+        if (live) z.rig.update(dt);
+      } else {
+        const bob = Math.abs(Math.sin(z.phase)) * 0.06 * z.s;
+        D.position.set(z.x, bob, z.z);
+        D.rotation.set(z.type === 'runner' ? 0.35 : 0.12, z.ang, Math.sin(z.phase) * 0.12);
+        D.scale.setScalar(z.s);
+        D.updateMatrix();
+        zm.setMatrixAt(zi, D.matrix);
+        if (z.flash > 0) c.setRGB(2.6, 2.6, 2.6); else c.setRGB(z.tr, z.tg, z.tb);
+        zm.setColorAt(zi, c);
+        zi++;
+      }
       D.position.set(z.x, 0.02, z.z);
       D.rotation.set(0, 0, 0);
       D.scale.setScalar(z.s * 1.1);
@@ -819,7 +992,14 @@ export class Battle {
       sh.setMatrixAt(i, D.matrix);
       i++;
     }
-    zm.count = sh.count = i;
+    // 倒下的丧尸：播完死亡动作后淡出、回收
+    for (let k = this.corpses.length - 1; k >= 0; k--) {
+      const cp = this.corpses[k];
+      if (live) { cp.t -= dt; cp.rig.update(dt); }
+      if (cp.t < 0.8) cp.rig.setOpacity(Math.max(0, cp.t / 0.8));
+      if (cp.t <= 0) { cp.pool.put(cp.rig); this.corpses.splice(k, 1); }
+    }
+    zm.count = zi; sh.count = i;
     zm.instanceMatrix.needsUpdate = true;
     zm.instanceColor.needsUpdate = true;
     sh.instanceMatrix.needsUpdate = true;
@@ -858,10 +1038,10 @@ export class Battle {
     for (const g of this.loot) {
       D.position.set(g.x, 0.3 + Math.sin(T * 3 + g.ph) * 0.08, g.z);
       D.rotation.set(0.3, T * 2 + g.ph, 0);
-      D.scale.setScalar(g.kind === 'med' ? 1.2 : 0.8 + Math.min(0.6, g.v * 0.05));
+      D.scale.setScalar(g.kind === 'scrap' ? 0.8 + Math.min(0.6, g.v * 0.05) : 1.2);
       D.updateMatrix();
       this.lMesh.setMatrixAt(i, D.matrix);
-      c.set(g.kind === 'med' ? 0xff4d4d : 0xd9a441);
+      c.set(g.kind === 'med' ? 0xff4d4d : g.kind === 'ammo' ? 0x6fbf4a : 0xd9a441);
       this.lMesh.setColorAt(i, c);
       i++;
     }
@@ -894,5 +1074,9 @@ export class Battle {
     this.camera.lookAt(f.x + sx, 0, f.z + sz);
   }
 
-  dispose() { disposeScene(this.scene); }
+  dispose() {
+    if (this.pools) for (const pl of Object.values(this.pools)) if (pl) pl.dispose();
+    if (this.pRig) this.pRig.dispose();
+    disposeScene(this.scene);
+  }
 }

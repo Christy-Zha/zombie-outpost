@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<script type="importmap">{"imports":{"three":"../../vendor/three.module.min.js"}}</script>
+</head><body>
+<script type="module">
+// Mixamo FBX → 游戏用 GLB 的转换页（由 tools/convert_models.mjs 在无界面浏览器里调用）
+import * as THREE from 'three';
+import { FBXLoader } from './jsm/loaders/FBXLoader.js';
+import { GLTFExporter } from './jsm/exporters/GLTFExporter.js';
+import { MeshoptSimplifier } from './jsm/libs/meshopt_simplifier.module.js';
+import { mergeVertices } from '../../vendor/utils/BufferGeometryUtils.js';
+
+const loader = new FBXLoader();
+const load = url => new Promise((ok, fail) => loader.load(url, ok, undefined, fail));
+
+// 去掉根骨骼的水平位移（防止跑步动画把角色带走），保留上下起伏
+function stripRootMotion(clip) {
+  for (const t of clip.tracks) {
+    if (!/Hips\.position$/.test(t.name)) continue;
+    const v = t.values, x0 = v[0], z0 = v[2];
+    for (let i = 0; i < v.length; i += 3) { v[i] = x0; v[i + 2] = z0; }
+  }
+  return clip;
+}
+
+function countTris(root) {
+  let n = 0;
+  root.traverse(o => { if (o.isMesh) n += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3; });
+  return Math.round(n);
+}
+
+// 减面：保持外形，把三角面减到 target 左右（只删三角形、不动顶点，所以骨骼权重和贴图坐标都保留）
+async function simplifyAll(root, target) {
+  const total = countTris(root);
+  if (!target || total <= target) return total;
+  await MeshoptSimplifier.ready;
+  const ratio = target / total;
+  root.traverse(m => {
+    if (!m.isMesh) return;
+    const src = m.geometry;
+    const groups = src.groups.map(g => ({ ...g }));
+    const g = src.index ? src : mergeVertices(src, 1e-5); // FBX 读出来没有索引，先把重复顶点合并
+    const idx = g.index.array, pos = g.attributes.position.array;
+    const ranges = groups.length ? groups : [{ start: 0, count: idx.length, materialIndex: 0 }];
+    const out = [], newGroups = [];
+    for (const r of ranges) {
+      const sub = new Uint32Array(idx.subarray(r.start, r.start + r.count));
+      const want = Math.max(3, Math.floor(sub.length * ratio / 3) * 3);
+      const [res] = MeshoptSimplifier.simplify(sub, pos, 3, want, 0.05, []);
+      newGroups.push({ start: out.length, count: res.length, materialIndex: r.materialIndex });
+      for (let i = 0; i < res.length; i++) out.push(res[i]);
+    }
+    g.setIndex(new THREE.BufferAttribute(new Uint32Array(out), 1));
+    g.clearGroups();
+    if (groups.length) for (const ng of newGroups) g.addGroup(ng.start, ng.count, ng.materialIndex);
+    m.geometry = g;
+  });
+  return countTris(root);
+}
+
+// files: [{ url, anim }]，第一个文件提供模型本体；maxTex：贴图最大边长
+window.convert = async (files, maxTex = 1024, targetTris = 0) => {
+  const base = await load(files[0].url);
+  const clips = [];
+  for (const f of files) {
+    const obj = f === files[0] ? base : await load(f.url);
+    const clip = obj.animations[0];
+    if (!clip) continue;
+    clip.name = f.anim;
+    clips.push(stripRootMotion(clip));
+  }
+  // 计算身高（用蒙皮后的真实顶点），写进 extras，游戏里据此统一缩放
+  base.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(base, true);
+  base.userData.height = box.max.y - box.min.y;
+  base.userData.footY = box.min.y;
+  const trisBefore = countTris(base);
+  const tris = await simplifyAll(base, targetTris);
+  const scene = new THREE.Scene();
+  scene.add(base);
+  const glb = await new GLTFExporter().parseAsync(scene, { binary: true, animations: clips, maxTextureSize: maxTex, onlyVisible: true });
+  // ArrayBuffer → base64，交给 node 写文件
+  const bytes = new Uint8Array(glb);
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return { b64: btoa(s), tris, trisBefore, height: base.userData.height, anims: clips.map(c => `${c.name}(${c.duration.toFixed(1)}s)`) };
+};
+window.__ready = true;
+</script></body></html>

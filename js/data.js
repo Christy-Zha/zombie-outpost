@@ -1,7 +1,7 @@
 // 游戏的所有数值配置都在这里，调平衡只改这个文件
 
 // 存档版本号：以后改存档结构时 +1，并在 save.js 的 migrate() 里做兼容
-export const SAVE_V = 2; // v2：新增装备（bag / gear）
+export const SAVE_V = 3; // v2：新增装备（bag / gear）；v3：新增剧情进度（story）
 
 // 一局时长（秒）：坚持到这个时间就算胜利撤离
 export const BATTLE_TIME = 300;

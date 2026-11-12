@@ -5,6 +5,8 @@ import * as S from './save.js';
 import { Battle } from './battle.js';
 import { BaseView } from './base.js';
 import { sfx } from './sfx.js';
+import { CHAPTERS, CAST } from './story.js';
+import { loadModels } from './models.js';
 
 const $ = id => document.getElementById(id);
 const fmt = n => { n = Math.floor(n); return n >= 100000 ? (n / 1000).toFixed(0) + 'k' : n >= 10000 ? (n / 1000).toFixed(1) + 'k' : String(n); };
@@ -14,6 +16,7 @@ const mmss = t => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2
 const renderer = new THREE.WebGLRenderer({ canvas: $('gl'), antialias: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 
+const loadedModels = await loadModels(); // 有 models/*.glb 就用真实模型
 let game = S.load();
 const before = { ...game.store };
 S.tick(game, Date.now());
@@ -115,10 +118,20 @@ function renderGo() {
     return `<button class="weap ${k === game.weapon ? 'sel' : ''} ${lock ? 'locked' : ''}" data-weap="${k}">
       <b>${w.icon} ${w.name}</b><small>${lock ? `军械库 Lv${w.armory} 解锁` : w.desc}</small></button>`;
   }).join('');
+  const chapters = CHAPTERS.map((c, i) => {
+    const locked = i > game.story.done, done = i < game.story.done;
+    return `<div class="zone story ${locked ? 'locked' : ''}" data-chapter="${i}">
+      <div class="zone-main">
+        <div class="zone-name">${locked ? '🔒' : done ? '✅' : '🔦'} ${c.title}</div>
+        <div class="zone-desc">${locked ? '先完成上一章' : `深夜 · 弹药有限 · 找到 ${c.obj.count} 个${c.obj.name}${c.boss ? ' · ☠️ 强敌' : ''}`}</div>
+        <div class="zone-meta">${done ? `重玩奖励 🔩${Math.round(c.reward.scrap * 0.3)}` : `奖励 🔩${c.reward.scrap}${c.reward.survivor ? ` · 同伴「${c.reward.survivor}」加入` : ''}`}</div>
+      </div>${locked ? '' : '<span class="zone-go">进入 ▶</span>'}</div>`;
+  }).join('');
   $('tab-go').innerHTML = `
     <div class="section-title">① 选择武器</div><div class="weapons">${weaps}</div>
     <div class="stat-line">攻击 ×${st.dmgMul.toFixed(2)} · 生命 ${st.maxHp} · 回血 ${st.regen.toFixed(1)}/秒</div>
-    <div class="section-title">② 点区域直接出发（坚持 ${BATTLE_TIME / 60} 分钟即可撤离）</div>${zones}`;
+    <div class="section-title">② 📖 主线剧情《启明之殇》 ${game.story.done}/${CHAPTERS.length}</div>${chapters}
+    <div class="section-title">③ ☠️ 自由出征（坚持 ${BATTLE_TIME / 60} 分钟撤离，刷物资和装备）</div>${zones}`;
 }
 
 const slotIcon = k => GEAR_SLOTS.find(x => x.key === k).icon;
@@ -217,6 +230,14 @@ $('tab-people').addEventListener('click', e => {
 });
 
 $('tab-go').addEventListener('click', e => {
+  const ch = e.target.closest('[data-chapter]');
+  if (ch) {
+    const i = +ch.dataset.chapter;
+    if (i > game.story.done) { toast('先完成上一章'); return; }
+    sfx.play('click');
+    playDialogue(CHAPTERS[i].intro, () => startBattle({ chapter: i }));
+    return;
+  }
   const z = e.target.closest('[data-zone]');
   if (z) {
     const i = +z.dataset.zone;
@@ -261,24 +282,72 @@ $('gl').addEventListener('pointerup', e => {
   tapStart = null;
 });
 
+
+// ---------- 剧情对白播放器 ----------
+// lines: [[说话人, 台词], ...]；点击屏幕：正在打字就直接显示完整句子，否则下一句
+let dlg = null;
+function playDialogue(lines, onDone) {
+  dlg = { lines, i: -1, onDone, typing: null, full: '' };
+  $('dlg').classList.remove('hidden');
+  nextLine();
+}
+function nextLine() {
+  if (!dlg) return;
+  dlg.i++;
+  if (dlg.i >= dlg.lines.length) { endDialogue(); return; }
+  const [who, text] = dlg.lines[dlg.i];
+  const nameEl = $('dlgName'), textEl = $('dlgText');
+  nameEl.textContent = who;
+  nameEl.style.color = (CAST[who] && CAST[who].color) || '#fff';
+  textEl.classList.toggle('narr', !who);
+  dlg.full = text;
+  let n = 0;
+  textEl.textContent = '';
+  clearInterval(dlg.typing);
+  dlg.typing = setInterval(() => {
+    n += 1;
+    textEl.textContent = text.slice(0, n);
+    if (n >= text.length) { clearInterval(dlg.typing); dlg.typing = null; }
+  }, 35);
+}
+function endDialogue() {
+  if (!dlg) return;
+  clearInterval(dlg.typing);
+  const cb = dlg.onDone;
+  dlg = null;
+  $('dlg').classList.add('hidden');
+  if (cb) cb();
+}
+$('dlg').addEventListener('click', e => {
+  if (!dlg) return;
+  if (e.target.closest('#dlgSkip')) { sfx.play('click'); endDialogue(); return; }
+  if (dlg.typing) { clearInterval(dlg.typing); dlg.typing = null; $('dlgText').textContent = dlg.full; return; }
+  sfx.play('click');
+  nextLine();
+});
+
 // ---------- 战斗 ----------
 const joyIn = { x: 0, z: 0, on: false }, aimIn = { x: 0, z: 0, on: false }, keys = {};
 
-function startBattle() {
+function startBattle({ chapter = null } = {}) {
   sfx.unlock();
   S.tick(game, Date.now());
   save();
+  const story = chapter === null ? null : { ...CHAPTERS[chapter], index: chapter };
   battle = new Battle({
-    zoneIndex: game.zone, weaponKey: game.weapon, stats: S.battleStats(game),
-    cb: { onHud, onLevelUp, onEnd, onMsg, onHurt },
+    zoneIndex: story ? story.zone : game.zone, weaponKey: game.weapon, stats: S.battleStats(game),
+    cb: { onHud, onLevelUp, onEnd, onMsg, onHurt }, story,
   });
+  $('sSurv').classList.toggle('hidden', !!story);
+  $('sAmmo').classList.toggle('hidden', !story);
+  $('hObj').classList.toggle('hidden', !story);
   battle.resize(innerWidth, innerHeight);
   mode = 'battle';
   $('baseUI').classList.add('hidden');
   $('battleUI').classList.remove('hidden');
   $('bossBar').classList.add('hidden');
   onHud(battle.hudData());
-  onMsg(`${ZONES[game.zone].name}：会自动开枪，右边拖动可以手动瞄准`);
+  onMsg(story ? `${story.title}：找到 ${story.obj.count} 个${story.obj.name}` : `${ZONES[game.zone].name}：会自动开枪，右边拖动可以手动瞄准`);
   $('joyHint').classList.remove('off');
   setTimeout(() => $('joyHint').classList.add('off'), 6000);
 }
@@ -299,12 +368,17 @@ function onHud(d) {
   $('hpText').textContent = `${Math.ceil(d.hp)} / ${Math.round(d.maxHp)}`;
   $('xpFill').style.width = `${Math.min(100, (d.xp / d.need) * 100)}%`;
   $('lvText').textContent = `Lv ${d.level}`;
-  $('hTime').textContent = mmss(d.left);
+  $('hTime').textContent = d.story ? mmss(d.t) : mmss(d.left);
+  if (d.story) {
+    $('hAmmo').textContent = d.ammo;
+    $('sAmmo').style.color = d.ammo <= 10 ? '#ff6b5b' : '';
+    $('hObj').textContent = d.obj;
+  }
   $('hKills').textContent = d.kills;
   $('hScrap').textContent = d.scrap;
   $('hSurv').textContent = d.rescued;
   const bb = $('bossBar');
-  if (d.boss >= 0) { bb.classList.remove('hidden'); $('bossFill').style.width = `${d.boss * 100}%`; }
+  if (d.boss >= 0) { bb.classList.remove('hidden'); bb.querySelector('span').textContent = '☠️ ' + d.bossName; $('bossFill').style.width = `${d.boss * 100}%`; }
   else bb.classList.add('hidden');
 }
 
@@ -343,21 +417,26 @@ function onEnd(r) {
   let drop = '';
   if (sum.item) {
     const it = sum.item, rr = RARITIES[it.rarity];
-    drop = `<div class="drop-card" style="border-color:${rr.color}"><div class="muted">👑 尸王掉落</div>
+    drop = `<div class="drop-card" style="border-color:${rr.color}"><div class="muted">👑 ${r.bossName || '尸王'}掉落</div>
       <b style="color:${rr.color}">${slotIcon(it.slot)} ${it.name}</b> <small style="color:${rr.color}">${rr.name}</small>
       <div class="item-st">${itemStats(it)}</div>
       ${sum.itemScrap ? `<div class="muted">背包满了，已自动分解为 🔩${sum.itemScrap}</div>` : '<div class="muted">已放进背包，去「装备」页穿上</div>'}</div>`;
   } else if (r.win) drop = '<p class="muted">💡 撤离前击败尸王，可以获得装备</p>';
-  setTimeout(() => {
+  const storyLine = sum.storyFirst
+    ? `<p class="good">📖 ${CHAPTERS[r.story].title} 完成！</p>${sum.storyJoin ? `<p class="good">🧑 「${sum.storyJoin}」加入了据点</p>` : ''}${game.story.done < CHAPTERS.length ? `<p class="muted">下一章：${CHAPTERS[game.story.done].title}</p>` : ''}`
+    : (r.story !== null && !r.win ? '<p class="muted">💡 剧情关卡弹药有限：多捡绿色弹药箱，别乱开枪</p>' : '');
+  const showResult = () => setTimeout(() => {
     showModal(`<h2>${title}</h2>
       <div class="result">
         <div>坚持时间<b>${mmss(r.time)}</b></div>
         <div>击杀<b>${r.kills}</b></div>
         <div>带回物资<b>🔩 ${r.scrap}${sum.bonus ? ` + ${sum.bonus}` : ''}</b></div>
         <div>救出幸存者<b>${r.rescued}</b></div>
-      </div>${sum.bonus ? `<p class="good">撤离奖励 🔩${sum.bonus}${sum.firstClear ? '（首通双倍）' : ''}</p>` : ''}${drop}${next}${surv}${food}${tip}
+      </div>${sum.bonus ? `<p class="good">${r.story !== null ? '章节奖励' : '撤离奖励'} 🔩${sum.bonus}${sum.firstClear ? '（首通双倍）' : ''}</p>` : ''}${storyLine}${drop}${next}${surv}${food}${r.story !== null ? '' : tip}
       <button class="btn big" data-act="home">返回据点</button>`, 500);
   }, r.win || r.retreat ? 200 : 900);
+  if (r.story !== null && r.win) setTimeout(() => playDialogue(CHAPTERS[r.story].outro, showResult), 600);
+  else showResult();
 }
 
 function pauseBattle() {
@@ -506,7 +585,7 @@ const gainS = Math.floor(game.store.scrap - before.scrap), gainF = Math.floor(ga
 if (gainS + gainF > 0) setTimeout(() => toast(`离开期间仓库存了 🔩${gainS} 🌽${gainF}`), 600);
 
 // 调试入口：只有网址带 #debug 时才开放，用于自动化测试
-if (location.hash === '#debug') window.__dbg = { get battle() { return battle; }, get game() { return game; }, renderAll };
+if (location.hash === '#debug') window.__dbg = { get battle() { return battle; }, get game() { return game; }, renderAll, startBattle, models: loadedModels };
 
 // 注册离线缓存（添加到主屏幕后断网也能玩）
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {

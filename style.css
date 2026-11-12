@@ -110,7 +110,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .bar.xp { height: 12px; }
 .bar.xp i { background: linear-gradient(90deg, #2bb3c0, #4dd9ec); }
 .bar.xp span { font-size: 10px; line-height: 10px; }
-.bar.boss { position: absolute; top: calc(var(--top) + 86px); left: 15%; right: 15%; height: 16px; pointer-events: none; }
+.bar.boss { position: absolute; top: calc(var(--top) + 116px); left: 15%; right: 15%; height: 16px; pointer-events: none; }
 .bar.boss i { background: linear-gradient(90deg, #6d1b7b, #c0392b); }
 .bar.boss span { line-height: 14px; }
 .hud-stats { position: absolute; top: calc(var(--top) + 54px); left: 10px; right: 10px; display: flex; justify-content: space-between; font-size: 14px; pointer-events: none; text-shadow: 0 1px 3px #000; }
@@ -173,3 +173,16 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 /* 窄屏时隐藏资源的小字标签，避免挤成多行 */
 @media (max-width: 430px) { .res small { display: none; } }
+
+/* ---------- 剧情 ---------- */
+.hud-obj { position: absolute; top: calc(var(--top) + 84px); left: 50%; transform: translateX(-50%); background: rgba(0,0,0,.55); padding: 4px 14px; border-radius: 12px; font-size: 14px; font-weight: 800; color: #ffe08a; pointer-events: none; white-space: nowrap; }
+.zone.story { background: linear-gradient(90deg, rgba(60,80,120,.25), rgba(255,255,255,.03)); }
+.dlg { position: fixed; inset: 0; z-index: 25; background: radial-gradient(ellipse at 50% 35%, rgba(40,10,10,.92), rgba(0,0,0,.97) 70%); display: flex; flex-direction: column; justify-content: flex-end; }
+.dlg-bar.top { position: absolute; top: 0; left: 0; right: 0; height: calc(var(--top) + 9%); background: #000; }
+.dlg-skip { position: absolute; top: calc(var(--top) + 12px); right: 12px; z-index: 1; border: 1px solid rgba(255,255,255,.25); background: rgba(0,0,0,.5); border-radius: 14px; padding: 6px 12px; font-size: 13px; }
+.dlg-box { margin: 0 10px calc(var(--bottom) + 18px); min-height: 150px; padding: 16px 18px; border-radius: 16px; background: rgba(10,12,16,.92); border: 1px solid rgba(255,255,255,.12); }
+.dlg-name { font-weight: 900; font-size: 17px; margin-bottom: 8px; min-height: 20px; }
+.dlg-text { font-size: 17px; line-height: 1.65; min-height: 56px; }
+.dlg-text.narr { color: #b9b6a8; font-style: italic; text-align: center; }
+.dlg-hint { text-align: right; font-size: 12px; color: var(--muted); margin-top: 8px; animation: blink 1.2s infinite; }
+@keyframes blink { 50% { opacity: .3; } }

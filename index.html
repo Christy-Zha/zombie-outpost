@@ -13,6 +13,8 @@
 <link rel="apple-touch-icon" href="icons/icon-180.png">
 <link rel="icon" type="image/png" href="icons/icon-192.png">
 <link rel="stylesheet" href="style.css">
+<!-- 让模型加载器里的 import 'three' 指向本地文件（和游戏用的是同一份） -->
+<script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
 </head>
 <body>
 <canvas id="gl"></canvas>
@@ -60,14 +62,27 @@
     <span>⏱ <b id="hTime">5:00</b></span>
     <span>💀 <b id="hKills">0</b></span>
     <span>🔩 <b id="hScrap">0</b></span>
-    <span>🙌 <b id="hSurv">0</b></span>
+    <span id="sSurv">🙌 <b id="hSurv">0</b></span>
+    <span id="sAmmo" class="hidden">🔫 <b id="hAmmo">0</b></span>
   </div>
+  <div id="hObj" class="hud-obj hidden"></div>
   <div id="bossBar" class="bar boss hidden"><i id="bossFill"></i><span>☠️ 尸王</span></div>
   <div id="hMsg" class="hud-msg"></div>
   <div id="joy" class="joy hidden"><div id="joyKnob"></div></div>
   <div id="joyAim" class="joy aim hidden"><div id="joyAimKnob"></div></div>
   <div id="joyHint" class="joy-hint"><span>👈 左边拖动：移动</span><span>右边拖动：瞄准 👉</span></div>
   <div id="hurt" class="hurt"></div>
+</div>
+
+<!-- 剧情对白 -->
+<div id="dlg" class="dlg hidden">
+  <div class="dlg-bar top"></div>
+  <button id="dlgSkip" class="dlg-skip">跳过 ⏭</button>
+  <div class="dlg-box">
+    <div id="dlgName" class="dlg-name"></div>
+    <div id="dlgText" class="dlg-text"></div>
+    <div class="dlg-hint">点击继续 ▼</div>
+  </div>
 </div>
 
 <div id="modal" class="modal hidden"><div class="modal-box" id="modalBox"></div></div>
