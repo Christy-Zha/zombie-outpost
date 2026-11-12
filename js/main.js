@@ -398,9 +398,19 @@ function placeStick(st) {
   j.style.top = st.p.y + 'px';
   $(st.knob).style.transform = `translate(${st.input.x * R}px, ${st.input.z * R}px)`;
 }
+// 电脑鼠标：按住左键 = 朝鼠标所在方向开火（相对角色在屏幕上的位置）
+const mouseAim = { on: false, x: 0, y: 0 };
+function updateMouseAim(e) { mouseAim.x = e.clientX; mouseAim.y = e.clientY; }
 ui.addEventListener('pointerdown', e => {
   sfx.unlock();
   if (e.target.closest('button')) return;
+  if (e.pointerType === 'mouse') {
+    mouseAim.on = true; updateMouseAim(e);
+    try { ui.setPointerCapture(e.pointerId); } catch { /* 忽略 */ }
+    $('joyHint').classList.add('off');
+    e.preventDefault();
+    return;
+  }
   const st = e.clientX < innerWidth / 2 ? sticks.move : sticks.aim;
   if (st.p) return;
   st.p = { id: e.pointerId, x: e.clientX, y: e.clientY };
@@ -412,6 +422,7 @@ ui.addEventListener('pointerdown', e => {
   e.preventDefault();
 });
 ui.addEventListener('pointermove', e => {
+  if (e.pointerType === 'mouse') { updateMouseAim(e); return; }
   for (const st of Object.values(sticks)) {
     if (!st.p || e.pointerId !== st.p.id) continue;
     let dx = e.clientX - st.p.x, dy = e.clientY - st.p.y;
@@ -421,7 +432,7 @@ ui.addEventListener('pointermove', e => {
     placeStick(st);
   }
 });
-const joyEnd = e => { for (const st of Object.values(sticks)) if (st.p && e.pointerId === st.p.id) releaseStick(st); };
+const joyEnd = e => { if (e.pointerType === 'mouse') mouseAim.on = false; for (const st of Object.values(sticks)) if (st.p && e.pointerId === st.p.id) releaseStick(st); };
 ui.addEventListener('pointerup', joyEnd);
 ui.addEventListener('pointercancel', joyEnd);
 
@@ -471,7 +482,10 @@ function frame(now) {
     );
     const kx = (keys.ar ? 1 : 0) - (keys.al ? 1 : 0), kz = (keys.ad ? 1 : 0) - (keys.au ? 1 : 0);
     if (kx || kz) battle.setAim(kx, kz, true);
-    else battle.setAim(aimIn.x, aimIn.z, aimIn.on);
+    else if (mouseAim.on) {
+      const sp = battle.playerScreen(innerWidth, innerHeight);
+      battle.setAim(mouseAim.x - sp.x, mouseAim.y - sp.y, true);
+    } else battle.setAim(aimIn.x, aimIn.z, aimIn.on);
     battle.update(dt);
     battle.render(renderer, dt);
   } else {
@@ -496,5 +510,14 @@ if (location.hash === '#debug') window.__dbg = { get battle() { return battle; }
 
 // 注册离线缓存（添加到主屏幕后断网也能玩）
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  const hadController = !!navigator.serviceWorker.controller;
   navigator.serviceWorker.register('sw.js').catch(() => { /* 忽略 */ });
+  // 新版本装好后自动刷新一次（战斗中不打断，回到据点再刷新）
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloading) return;
+    reloading = true;
+    const tryReload = () => { if (mode === 'base') { save(); location.reload(); } else setTimeout(tryReload, 1000); };
+    tryReload();
+  });
 }

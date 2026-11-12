@@ -250,9 +250,16 @@ export class Battle {
 
   // 右摇杆：on=true 时朝 (x,z) 方向开火；松开后恢复自动瞄准
   setAim(x, z, on) {
-    const a = this.aimIn;
-    a.on = on && Math.hypot(x, z) > 0.25;
-    if (a.on) { a.x = x; a.z = z; }
+    const a = this.aimIn, L = Math.hypot(x, z);
+    a.on = on && L > 0.25;
+    if (a.on) { a.x = x / L; a.z = z / L; }
+  }
+
+  // 角色在屏幕上的像素位置（给鼠标瞄准用）
+  playerScreen(w, h) {
+    const v = this._sv || (this._sv = new THREE.Vector3());
+    v.set(this.p.x, 1, this.p.z).project(this.camera);
+    return { x: (v.x + 1) / 2 * w, y: (1 - v.y) / 2 * h };
   }
 
   // ---------- 主循环 ----------
