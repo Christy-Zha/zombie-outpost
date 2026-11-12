@@ -1,0 +1,16 @@
+{
+  "name": "尸潮据点",
+  "short_name": "尸潮据点",
+  "description": "3D 丧尸割草射击 + 末日基地经营",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#14170f",
+  "theme_color": "#14170f",
+  "lang": "zh-CN",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
