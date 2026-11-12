@@ -76,6 +76,16 @@ window.convert = async (files, maxTex = 1024, targetTris = 0) => {
   base.userData.footY = box.min.y;
   const trisBefore = countTris(base);
   const tris = await simplifyAll(base, targetTris);
+  // 瘦身：游戏里只用颜色贴图，法线/高光等贴图全部去掉；颜色贴图存成 JPEG（有透明的除外）
+  base.traverse(o => {
+    if (!o.isMesh) return;
+    const slim = m => {
+      const transparent = m.transparent || m.alphaTest > 0 || m.opacity < 1;
+      if (m.map) m.map.userData.mimeType = transparent ? 'image/png' : 'image/jpeg';
+      return new THREE.MeshStandardMaterial({ name: m.name, map: m.map || null, color: m.color ? m.color.clone() : 0xffffff, transparent, alphaTest: m.alphaTest || 0, side: m.side });
+    };
+    o.material = Array.isArray(o.material) ? o.material.map(slim) : slim(o.material);
+  });
   const scene = new THREE.Scene();
   scene.add(base);
   const glb = await new GLTFExporter().parseAsync(scene, { binary: true, animations: clips, maxTextureSize: maxTex, onlyVisible: true });

@@ -14,10 +14,12 @@
 - 不照搬任何现成游戏的人物/剧情
 
 ## 真实模型流程
-1. 用户把 Mixamo FBX 放进 models_src/{player,zombie,mutant}/（文件名 = 动作名：player 用 idle/run/shoot/death，丧尸用 walk/run/attack/death）
-2. `node tools/convert_models.mjs` → 输出 models/*.glb（自动合并动作、去根位移、减面、压贴图；不需要装软件）
+0. 自动下载：用 `--remote-debugging-port=9334` 开一个独立 Chrome 窗口进 mixamo.com，**用户本人登录**后运行 `node tools/mixamo_download.mjs`（角色/动作 id 写在脚本 JOBS 里；当前：主角 Swat、丧尸 Copzombie、变异体 Mutant）
+1. 或者用户手动把 Mixamo FBX 放进 models_src/{player,zombie,mutant}/（文件名 = 动作名：player 用 idle/run/shoot/death，丧尸用 walk/run/attack/death）
+2. `node tools/convert_models.mjs` → 输出 models/*.glb（自动合并动作、去根位移、减面、只留颜色贴图并存 JPEG；三个角色共约 5MB）
 3. 游戏启动时 js/models.js 自动加载 models/*.glb；没有就退回方块人
 - models_src/ 不进 git（Mixamo 条款不允许单独分发原始素材）；models/*.glb 是游戏运行需要的
+- ⚠️ 推送到公开 GitHub 前要和用户确认：公开仓库里放 Mixamo 转换后的模型属于灰色地带（游戏里使用没问题）
 - 用真实模型时割草模式同屏上限 45 只（battle.js maxZ），剧情模式按章节 maxAlive
 
 ## 关键约定

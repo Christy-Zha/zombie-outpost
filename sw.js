@@ -1,11 +1,12 @@
 // 离线缓存：先用缓存秒开，同时后台悄悄更新，下次打开就是新版本
 // 发布新版本时，把 CACHE 的版本号 +1
-const CACHE = 'zombie-outpost-v5';
+const CACHE = 'zombie-outpost-v6';
 const ASSETS = [
   './', './index.html', './style.css', './manifest.webmanifest',
   './js/main.js', './js/data.js', './js/save.js', './js/battle.js', './js/base.js', './js/util.js', './js/sfx.js',
   './js/story.js', './js/models.js',
   './vendor/three.module.min.js', './vendor/GLTFLoader.js', './vendor/SkeletonUtils.js', './vendor/utils/BufferGeometryUtils.js',
+  './models/player.glb', './models/zombie.glb', './models/mutant.glb',
   './icons/icon-180.png', './icons/icon-192.png', './icons/icon-512.png',
 ];
 

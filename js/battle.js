@@ -339,6 +339,7 @@ export class Battle {
     this.camera.aspect = w / h;
     this.camera.fov = portrait ? 52 : 45;
     this.camOff.set(0, portrait ? 18 : 15, portrait ? 13 : 11);
+    if (this.story) this.camOff.set(0, portrait ? 12.5 : 11, portrait ? 10 : 9); // 剧情：镜头更近，更有压迫感
     const L = this.camOff.length();
     this.scene.fog.near = this.story ? L - 4 : L + 3;
     this.scene.fog.far = this.story ? L + 14 : L + 32;
