@@ -62,6 +62,10 @@ await sleep(500);
 await key('KeyD', 'keyDown');
 await sleep(4000);
 await key('KeyD', 'keyUp');
+await key('ArrowLeft', 'keyDown');
+await sleep(1200);
+await shot('04b-manual-aim');
+await key('ArrowLeft', 'keyUp');
 await shot('04-battle-start');
 console.log('战斗状态', await ev(`JSON.stringify(__dbg.battle.hudData())`));
 
@@ -86,13 +90,19 @@ const fps = await ev(`new Promise(r => { let n = 0; const t0 = performance.now()
 console.log('无界面软件渲染下的帧率（真机会快很多）:', fps);
 
 // 快进到胜利
-await ev(`(() => { const b = __dbg.battle; b.pendingLevels = 0; b.paused = false; document.getElementById('modal').classList.add('hidden'); b.t = 299.8; return true; })()`);
+await ev(`(() => { const b = __dbg.battle; b.pendingLevels = 0; b.paused = false; document.getElementById('modal').classList.add('hidden'); b.t = 299.8; b.bossKilled = true; return true; })()`);
 await sleep(1500);
 await shot('07-result');
 console.log('结算后存档', await ev(`JSON.stringify({ scrap: __dbg.game.scrap, cleared: __dbg.game.cleared, survivors: __dbg.game.survivors })`));
 await ev(`document.querySelector('[data-act="home"]').click(); true`);
 await sleep(800);
 await shot('08-home');
+await ev(`document.querySelector('[data-tab="gear"]').click(); true`);
+await sleep(300);
+await ev(`(() => { const b = document.querySelector('[data-equip]'); if (b) b.click(); return true; })()`);
+await sleep(300);
+await shot('08b-gear');
+console.log('装备后战斗属性', await ev(`JSON.stringify(__dbg.game.gear)`));
 
 // 横屏
 await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 720, deviceScaleFactor: 1, mobile: false });

@@ -1,6 +1,6 @@
 // 主程序：界面切换、按钮事件、摇杆输入、游戏循环
 import * as THREE from '../vendor/three.module.min.js';
-import { BUILDINGS, WEAPONS, ZONES, BATTLE_TIME } from './data.js';
+import { BUILDINGS, WEAPONS, ZONES, BATTLE_TIME, GEAR_SLOTS, RARITIES, BAG_SIZE } from './data.js';
 import * as S from './save.js';
 import { Battle } from './battle.js';
 import { BaseView } from './base.js';
@@ -121,11 +121,52 @@ function renderGo() {
     <div class="section-title">② 点区域直接出发（坚持 ${BATTLE_TIME / 60} 分钟即可撤离）</div>${zones}`;
 }
 
+const slotIcon = k => GEAR_SLOTS.find(x => x.key === k).icon;
+const itemStats = it => Object.entries(it.stats).map(([k, v]) => S.statText(k, v)).join(' · ');
+
+function renderGear() {
+  const slots = GEAR_SLOTS.map(sl => {
+    const it = game.bag.find(x => x.id === game.gear[sl.key]);
+    const c = it ? RARITIES[it.rarity].color : '';
+    return `<div class="slot" style="${it ? `border-color:${c}` : ''}">
+      <div class="s-ic">${sl.icon}</div>
+      <div class="s-name" style="${it ? `color:${c}` : ''}">${it ? it.name : sl.name}</div>
+      <div class="s-st">${it ? Object.entries(it.stats).map(([k, v]) => S.statText(k, v)).join('<br>') : '<span class="muted">未装备</span>'}</div></div>`;
+  }).join('');
+  const t = S.gearTotals(game);
+  const total = Object.entries(t).filter(([, v]) => v > 0).map(([k, v]) => S.statText(k, Math.round(v * 1000) / 1000)).join(' · ');
+  const items = [...game.bag].sort((a, b) => b.rarity - a.rarity || b.zone - a.zone).map(it => {
+    const rr = RARITIES[it.rarity], on = game.gear[it.slot] === it.id;
+    return `<div class="item ${on ? 'on' : ''}" style="border-color:${rr.color}">
+      <div class="item-main"><div class="item-name" style="color:${rr.color}">${slotIcon(it.slot)} ${it.name}<small>${rr.name} · 区域${it.zone + 1}</small></div>
+        <div class="item-st">${itemStats(it)}</div></div>
+      <button class="btn ${on ? 'ghost' : ''}" data-equip="${it.id}">${on ? '卸下' : '装备'}</button>
+      <button class="btn ghost" data-dis="${it.id}">分解<br><small>🔩${S.dismantleValue(it)}</small></button></div>`;
+  }).join('');
+  $('tab-gear').innerHTML = `<div class="slots">${slots}</div>
+    <div class="stat-line">${total ? '装备加成：' + total : '击败尸王会掉落装备，品质有 普通 / 精良 / 史诗 / 传说'}</div>
+    <div class="section-title">背包 ${game.bag.length}/${BAG_SIZE}（满了以后新装备会自动分解）</div>
+    ${items || '<div class="muted" style="text-align:center;padding:20px">背包是空的。去出征，在第 4 分钟击败尸王吧！</div>'}`;
+}
+
+$('tab-gear').addEventListener('click', e => {
+  const eq = e.target.closest('[data-equip]');
+  if (eq) { S.equip(game, +eq.dataset.equip); sfx.play('build'); save(); renderGear(); return; }
+  const d = e.target.closest('[data-dis]');
+  if (d) {
+    // 分解要点两次，防止误删
+    if (d.dataset.confirm !== '1') { d.dataset.confirm = '1'; d.innerHTML = '确定？'; setTimeout(() => { if (d.isConnected) renderGear(); }, 2500); return; }
+    const v = S.dismantle(game, +d.dataset.dis);
+    sfx.play('coin'); toast(`分解获得 🔩${v}`); save(); renderAll();
+  }
+});
+
 function renderTab() {
   for (const b of document.querySelectorAll('.tabs button')) b.classList.toggle('active', b.dataset.tab === tab);
-  for (const k of ['build', 'people', 'go']) $('tab-' + k).classList.toggle('hidden', k !== tab);
+  for (const k of ['build', 'people', 'gear', 'go']) $('tab-' + k).classList.toggle('hidden', k !== tab);
   if (tab === 'build') renderBuild();
   else if (tab === 'people') renderPeople();
+  else if (tab === 'gear') renderGear();
   else renderGo();
 }
 
@@ -221,8 +262,7 @@ $('gl').addEventListener('pointerup', e => {
 });
 
 // ---------- 战斗 ----------
-const joyIn = { x: 0, z: 0 }, keys = {};
-let joy = null;
+const joyIn = { x: 0, z: 0, on: false }, aimIn = { x: 0, z: 0, on: false }, keys = {};
 
 function startBattle() {
   sfx.unlock();
@@ -238,7 +278,9 @@ function startBattle() {
   $('battleUI').classList.remove('hidden');
   $('bossBar').classList.add('hidden');
   onHud(battle.hudData());
-  onMsg(`${ZONES[game.zone].name}：按住屏幕拖动来移动，会自动开枪`);
+  onMsg(`${ZONES[game.zone].name}：会自动开枪，右边拖动可以手动瞄准`);
+  $('joyHint').classList.remove('off');
+  setTimeout(() => $('joyHint').classList.add('off'), 6000);
 }
 
 function goHome() {
@@ -298,6 +340,14 @@ function onEnd(r) {
   const surv = sum.joined.length ? `<p class="good">🧑 ${sum.joined.join('、')} 加入了据点</p>` : '';
   const food = sum.extraFood ? `<p class="muted">宿舍住不下，获救者留下了 🌽${sum.extraFood} 食物</p>` : '';
   const tip = !r.win ? '<p class="muted">💡 回据点升级军械库、训练场，下次能撑更久</p>' : '';
+  let drop = '';
+  if (sum.item) {
+    const it = sum.item, rr = RARITIES[it.rarity];
+    drop = `<div class="drop-card" style="border-color:${rr.color}"><div class="muted">👑 尸王掉落</div>
+      <b style="color:${rr.color}">${slotIcon(it.slot)} ${it.name}</b> <small style="color:${rr.color}">${rr.name}</small>
+      <div class="item-st">${itemStats(it)}</div>
+      ${sum.itemScrap ? `<div class="muted">背包满了，已自动分解为 🔩${sum.itemScrap}</div>` : '<div class="muted">已放进背包，去「装备」页穿上</div>'}</div>`;
+  } else if (r.win) drop = '<p class="muted">💡 撤离前击败尸王，可以获得装备</p>';
   setTimeout(() => {
     showModal(`<h2>${title}</h2>
       <div class="result">
@@ -305,7 +355,7 @@ function onEnd(r) {
         <div>击杀<b>${r.kills}</b></div>
         <div>带回物资<b>🔩 ${r.scrap}${sum.bonus ? ` + ${sum.bonus}` : ''}</b></div>
         <div>救出幸存者<b>${r.rescued}</b></div>
-      </div>${sum.bonus ? `<p class="good">撤离奖励 🔩${sum.bonus}${sum.firstClear ? '（首通双倍）' : ''}</p>` : ''}${next}${surv}${food}${tip}
+      </div>${sum.bonus ? `<p class="good">撤离奖励 🔩${sum.bonus}${sum.firstClear ? '（首通双倍）' : ''}</p>` : ''}${drop}${next}${surv}${food}${tip}
       <button class="btn big" data-act="home">返回据点</button>`, 500);
   }, r.win || r.retreat ? 200 : 900);
 }
@@ -333,38 +383,50 @@ $('modalBox').addEventListener('click', e => {
   }
 });
 
-// 浮动摇杆：在屏幕任意位置按下就是摇杆中心
+// 双摇杆：左半屏 = 移动，右半屏 = 瞄准（按住朝该方向开火，松手恢复自动瞄准）
+// 两个摇杆都是“浮动”的：手指按在哪，摇杆中心就在哪
 const ui = $('battleUI'), R = 55;
-function releaseJoy() { joy = null; joyIn.x = joyIn.z = 0; $('joy').classList.add('hidden'); }
-function placeJoy() {
-  const j = $('joy');
-  j.style.left = joy.x + 'px';
-  j.style.top = joy.y + 'px';
-  $('joyKnob').style.transform = `translate(${joyIn.x * R}px, ${joyIn.z * R}px)`;
+const sticks = {
+  move: { el: 'joy', knob: 'joyKnob', input: joyIn, p: null },
+  aim: { el: 'joyAim', knob: 'joyAimKnob', input: aimIn, p: null },
+};
+function releaseStick(st) { st.p = null; st.input.x = st.input.z = 0; st.input.on = false; $(st.el).classList.add('hidden'); }
+function releaseJoy() { releaseStick(sticks.move); releaseStick(sticks.aim); }
+function placeStick(st) {
+  const j = $(st.el);
+  j.style.left = st.p.x + 'px';
+  j.style.top = st.p.y + 'px';
+  $(st.knob).style.transform = `translate(${st.input.x * R}px, ${st.input.z * R}px)`;
 }
 ui.addEventListener('pointerdown', e => {
   sfx.unlock();
-  if (e.target.closest('button') || joy) return;
-  joy = { id: e.pointerId, x: e.clientX, y: e.clientY };
+  if (e.target.closest('button')) return;
+  const st = e.clientX < innerWidth / 2 ? sticks.move : sticks.aim;
+  if (st.p) return;
+  st.p = { id: e.pointerId, x: e.clientX, y: e.clientY };
+  st.input.on = true;
   try { ui.setPointerCapture(e.pointerId); } catch { /* 忽略 */ }
-  $('joy').classList.remove('hidden');
-  placeJoy();
+  $(st.el).classList.remove('hidden');
+  $('joyHint').classList.add('off');
+  placeStick(st);
   e.preventDefault();
 });
 ui.addEventListener('pointermove', e => {
-  if (!joy || e.pointerId !== joy.id) return;
-  let dx = e.clientX - joy.x, dy = e.clientY - joy.y;
-  const L = Math.hypot(dx, dy);
-  if (L > R) { joy.x += dx / L * (L - R); joy.y += dy / L * (L - R); dx = dx / L * R; dy = dy / L * R; } // 手指拖远了，摇杆跟着走
-  joyIn.x = dx / R; joyIn.z = dy / R;
-  placeJoy();
+  for (const st of Object.values(sticks)) {
+    if (!st.p || e.pointerId !== st.p.id) continue;
+    let dx = e.clientX - st.p.x, dy = e.clientY - st.p.y;
+    const L = Math.hypot(dx, dy);
+    if (L > R) { st.p.x += dx / L * (L - R); st.p.y += dy / L * (L - R); dx = dx / L * R; dy = dy / L * R; } // 手指拖远了，摇杆跟着走
+    st.input.x = dx / R; st.input.z = dy / R;
+    placeStick(st);
+  }
 });
-const joyEnd = e => { if (joy && e.pointerId === joy.id) releaseJoy(); };
+const joyEnd = e => { for (const st of Object.values(sticks)) if (st.p && e.pointerId === st.p.id) releaseStick(st); };
 ui.addEventListener('pointerup', joyEnd);
 ui.addEventListener('pointercancel', joyEnd);
 
-// 电脑上用 WASD / 方向键测试
-const KEYMAP = { KeyW: 'u', ArrowUp: 'u', KeyS: 'd', ArrowDown: 'd', KeyA: 'l', ArrowLeft: 'l', KeyD: 'r', ArrowRight: 'r' };
+// 电脑上测试：WASD 移动，方向键瞄准
+const KEYMAP = { KeyW: 'u', KeyS: 'd', KeyA: 'l', KeyD: 'r', ArrowUp: 'au', ArrowDown: 'ad', ArrowLeft: 'al', ArrowRight: 'ar' };
 addEventListener('keydown', e => {
   if (KEYMAP[e.code]) keys[KEYMAP[e.code]] = true;
   if (e.code === 'Escape' || e.code === 'KeyP') pauseBattle();
@@ -407,6 +469,9 @@ function frame(now) {
       joyIn.x + (keys.r ? 1 : 0) - (keys.l ? 1 : 0),
       joyIn.z + (keys.d ? 1 : 0) - (keys.u ? 1 : 0)
     );
+    const kx = (keys.ar ? 1 : 0) - (keys.al ? 1 : 0), kz = (keys.ad ? 1 : 0) - (keys.au ? 1 : 0);
+    if (kx || kz) battle.setAim(kx, kz, true);
+    else battle.setAim(aimIn.x, aimIn.z, aimIn.on);
     battle.update(dt);
     battle.render(renderer, dt);
   } else {

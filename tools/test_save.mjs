@@ -68,6 +68,55 @@ const fresh = S.load(mem);
 assert.equal(fresh.scrap, 120);
 assert.equal(mem.getItem(S.SAVE_KEY + '-backup'), '{坏掉的');
 
+// ---------- 装备 ----------
+// v1 老存档（没有装备字段）要能正常加载
+mem.setItem(S.SAVE_KEY, JSON.stringify({ v: 1, scrap: 50, buildings: { hq: 2, armory: 1 }, survivors: ['老王'] }));
+const v1 = S.load(mem);
+assert.equal(v1.v, 2);
+assert.deepEqual(v1.bag, []);
+assert.deepEqual(v1.gear, { head: null, body: null, acc: null });
+assert.equal(v1.survivors[0], '老王');
+
+// 没打掉尸王：没有装备
+let g = S.defaultSave(t0);
+let res = S.applyResult(g, { win: true, zoneIndex: 0, time: 300, kills: 1, scrap: 0, rescued: 0, level: 1, bossKilled: false });
+assert.equal(res.item, null);
+assert.equal(g.bag.length, 0);
+// 打掉尸王：掉一件
+res = S.applyResult(g, { win: true, zoneIndex: 0, time: 300, kills: 1, scrap: 0, rescued: 0, level: 1, bossKilled: true });
+assert.ok(res.item);
+assert.equal(g.bag.length, 1);
+assert.equal(g.stats.bossKills, 1);
+
+// 穿上后战斗属性变强；再点一次卸下
+const it = g.bag[0];
+const before2 = S.battleStats(g);
+S.equip(g, it.id);
+assert.equal(g.gear[it.slot], it.id);
+const after2 = S.battleStats(g);
+assert.ok(after2.maxHp > before2.maxHp || after2.dmgMul > before2.dmgMul, '装备应提升属性');
+S.equip(g, it.id);
+assert.equal(g.gear[it.slot], null);
+
+// 分解：返还物资，穿着的也会自动卸下
+S.equip(g, it.id);
+const sc = g.scrap;
+const val = S.dismantle(g, it.id);
+assert.equal(g.scrap, sc + val);
+assert.equal(g.bag.length, 0);
+assert.equal(g.gear[it.slot], null);
+
+// 背包满了自动分解
+for (let i = 0; i < 25; i++) S.addItem(g, S.makeItem(g, 2));
+assert.equal(g.bag.length, 20);
+
+// 品质分布：区域越后传说越多
+const dist = zi => { const c = [0, 0, 0, 0]; for (let i = 0; i < 20000; i++) c[S.rollRarity(zi)]++; return c.map(x => (x / 200).toFixed(1) + '%').join(' / '); };
+console.log('区域1 品质（普通/精良/史诗/传说）:', dist(0));
+console.log('区域5 品质（普通/精良/史诗/传说）:', dist(4));
+const sample = S.makeItem(g, 4, 3);
+console.log('区域5 传说样例:', sample.name, JSON.stringify(sample.stats));
+
 // 费用曲线打印，方便调平衡
 const line = k => [0, 1, 2, 4, 6, 9].map(lv => S.cost(k, lv)).join(' / ');
 console.log('指挥部费用 Lv0/1/2/4/6/9:', line('hq'));

@@ -1,5 +1,5 @@
 // 存档与经济系统（纯逻辑，不依赖画面，可以单独用 node 测试）
-import { BUILDINGS, WEAPONS, ZONES, SAVE_V, SURVIVOR_NAMES, STORE_HOURS } from './data.js';
+import { BUILDINGS, WEAPONS, ZONES, SAVE_V, SURVIVOR_NAMES, STORE_HOURS, GEAR_SLOTS, RARITIES, GEAR_STATS, BAG_SIZE } from './data.js';
 
 export const SAVE_KEY = 'zombie-outpost-save';
 const B = Object.fromEntries(BUILDINGS.map(b => [b.key, b]));
@@ -20,7 +20,10 @@ export function defaultSave(now = Date.now()) {
     store: { scrap: 0, food: 0 }, // 仓库里还没收取的离线产出
     lastTick: now,
     sound: true,
-    stats: { runs: 0, kills: 0, best: {} },
+    stats: { runs: 0, kills: 0, best: {}, bossKills: 0 },
+    bag: [],                                  // 背包里的装备
+    gear: { head: null, body: null, acc: null }, // 已穿戴装备的 id
+    nextItemId: 1,
   };
 }
 
@@ -34,6 +37,12 @@ export function migrate(d, now = Date.now()) {
   s.stats = { ...def.stats, ...(d.stats || {}) };
   s.stats.best = { ...(s.stats.best || {}) };
   if (!Array.isArray(s.survivors)) s.survivors = [];
+  // v1 → v2：补上装备字段
+  if (!Array.isArray(s.bag)) s.bag = [];
+  s.gear = { ...def.gear, ...(d.gear || {}) };
+  for (const k of Object.keys(s.gear)) if (s.gear[k] !== null && !s.bag.some(it => it.id === s.gear[k])) s.gear[k] = null;
+  if (typeof s.nextItemId !== 'number') s.nextItemId = s.bag.reduce((m, it) => Math.max(m, it.id + 1), 1);
+  if (typeof s.stats.bossKills !== 'number') s.stats.bossKills = 0;
   if (!WEAPONS[s.weapon]) s.weapon = 'pistol';
   if (typeof s.lastTick !== 'number') s.lastTick = now;
   s.cleared = Math.max(0, Math.min(ZONES.length, s.cleared | 0));
@@ -140,14 +149,86 @@ export function upgrade(s, key, now = Date.now()) {
 
 // ---------- 战斗相关 ----------
 export function battleStats(s) {
-  const b = s.buildings, n = s.survivors.length;
+  const b = s.buildings, n = s.survivors.length, g = gearTotals(s);
   return {
-    dmgMul: (1 + 0.1 * b.armory) * (1 + 0.02 * n),
-    maxHp: 100 + 20 * b.gym,
-    regen: 0.4 * b.clinic,
+    dmgMul: (1 + 0.1 * b.armory) * (1 + 0.02 * n) * (1 + g.dmg),
+    maxHp: Math.round(100 + 20 * b.gym + g.hp),
+    regen: 0.4 * b.clinic + g.regen,
     xpMul: 1 + 0.08 * b.radio,
-    pickupMul: 1,
+    pickupMul: 1 + g.pickup,
+    rateMul: 1 + g.rate,
+    speedMul: 1 + g.speed,
   };
+}
+
+// ---------- 装备 ----------
+const SLOT = Object.fromEntries(GEAR_SLOTS.map(x => [x.key, x]));
+
+// 掉落品质：区域越靠后，好装备越多
+export function rollRarity(zoneIndex, rnd = Math.random) {
+  const w = RARITIES.map((r, i) => Math.max(1, r.weight + zoneIndex * [-9, 2, 4, 3][i]));
+  let x = rnd() * w.reduce((a, b) => a + b, 0);
+  for (let i = 0; i < w.length; i++) { x -= w[i]; if (x < 0) return i; }
+  return 0;
+}
+
+function statValue(key, zoneIndex, rarity, rnd) {
+  const st = GEAR_STATS[key];
+  const v = st.base * RARITIES[rarity].mult * (st.zone ? 1 + 0.6 * zoneIndex : 1) * (0.85 + rnd() * 0.3);
+  return st.pct ? Math.round(v * 1000) / 1000 : Math.round(v * 10) / 10;
+}
+
+export function makeItem(s, zoneIndex, rarity = rollRarity(zoneIndex), rnd = Math.random) {
+  const slot = GEAR_SLOTS[Math.floor(rnd() * GEAR_SLOTS.length)];
+  const stats = { [slot.main]: statValue(slot.main, zoneIndex, rarity, rnd) };
+  const pool = Object.keys(GEAR_STATS).filter(k => k !== slot.main);
+  for (let i = 0; i < RARITIES[rarity].extra; i++) {
+    const k = pool.splice(Math.floor(rnd() * pool.length), 1)[0];
+    stats[k] = statValue(k, zoneIndex, rarity, rnd);
+  }
+  const name = slot.names[Math.min(slot.names.length - 1, Math.floor(zoneIndex * 0.8 + rnd() * 1.5))];
+  return { id: s.nextItemId++, slot: slot.key, name, rarity, zone: zoneIndex, stats };
+}
+
+export const dismantleValue = it => Math.round(30 * (it.rarity + 1) * (1 + 0.6 * it.zone));
+
+// 放进背包；背包满了自动分解成物资
+export function addItem(s, it) {
+  if (s.bag.length >= BAG_SIZE) { const v = dismantleValue(it); s.scrap += v; return { stored: false, scrap: v }; }
+  s.bag.push(it);
+  return { stored: true };
+}
+
+export function equip(s, id) {
+  const it = s.bag.find(x => x.id === id);
+  if (!it) return false;
+  s.gear[it.slot] = s.gear[it.slot] === id ? null : id; // 再点一次 = 卸下
+  return true;
+}
+
+export function dismantle(s, id) {
+  const i = s.bag.findIndex(x => x.id === id);
+  if (i < 0) return 0;
+  const it = s.bag[i];
+  if (s.gear[it.slot] === id) s.gear[it.slot] = null;
+  s.bag.splice(i, 1);
+  const v = dismantleValue(it);
+  s.scrap += v;
+  return v;
+}
+
+export function gearTotals(s) {
+  const t = Object.fromEntries(Object.keys(GEAR_STATS).map(k => [k, 0]));
+  for (const slot of Object.keys(s.gear || {})) {
+    const it = s.bag.find(x => x.id === s.gear[slot]);
+    if (it) for (const [k, v] of Object.entries(it.stats)) t[k] += v;
+  }
+  return t;
+}
+
+export function statText(key, v) {
+  const st = GEAR_STATS[key];
+  return `${st.name} +${st.pct ? Math.round(v * 100) + '%' : v}`;
 }
 
 export const weaponUnlocked = (s, key) => s.buildings.armory >= WEAPONS[key].armory;
@@ -178,8 +259,16 @@ export function applyResult(s, r) {
     }
   }
   s.food += extraFood;
+  // 击败尸王：掉落一件装备
+  let item = null, itemScrap = 0;
+  if (r.bossKilled) {
+    item = makeItem(s, r.zoneIndex);
+    const put = addItem(s, item);
+    if (!put.stored) itemScrap = put.scrap;
+    s.stats.bossKills++;
+  }
   s.stats.runs++;
   s.stats.kills += r.kills;
   s.stats.best[r.zoneIndex] = Math.max(s.stats.best[r.zoneIndex] || 0, Math.floor(r.time));
-  return { bonus, firstClear, joined, extraFood };
+  return { bonus, firstClear, joined, extraFood, item, itemScrap };
 }

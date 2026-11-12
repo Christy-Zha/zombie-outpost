@@ -44,6 +44,8 @@ export class Battle {
     this.skills = {};
     this.p = { x: 0, z: 0, hp: stats.maxHp, maxHp: stats.maxHp, invuln: 0, face: 0, aim: 0, aimT: 0, fireCd: 0.5, moving: false, walk: 0, recoil: 0, mvAng: 0 };
     this.input = { x: 0, z: 0 };
+    this.aimIn = { x: 0, z: 0, on: false }; // 手动瞄准（右摇杆）
+    this.bossKilled = false;
     this.zs = []; this.bullets = []; this.gems = []; this.loot = []; this.parts = []; this.fires = []; this.saws = [];
     this.nid = 1; this.spawnAcc = 0; this.nextHorde = 60; this.nextBeacon = 35;
     this.bossSpawned = false; this.boss = null; this.beacon = null;
@@ -60,10 +62,10 @@ export class Battle {
   // ---------- 数值（基地加成 × 局内技能） ----------
   sk(k) { return this.skills[k] || 0; }
   get dmg() { return this.w.dmg * this.base.dmgMul * (1 + 0.25 * this.sk('dmg')); }
-  get rate() { return this.w.rate * (1 + 0.18 * this.sk('rate')); }
+  get rate() { return this.w.rate * (this.base.rateMul || 1) * (1 + 0.18 * this.sk('rate')); }
   get count() { return this.w.count + this.sk('multi'); }
   get pierce() { return this.w.pierce + this.sk('pierce'); }
-  get speed() { return 6 * (1 + 0.1 * this.sk('speed')); }
+  get speed() { return 6 * (this.base.speedMul || 1) * (1 + 0.1 * this.sk('speed')); }
   get pickR() { return 3 * this.base.pickupMul * (1 + 0.4 * this.sk('magnet')); }
   get regen() { return this.base.regen + this.sk('regen'); }
   need(L) { return 3 + (L - 1) * 3; }
@@ -130,6 +132,11 @@ export class Battle {
     this.arrow = new THREE.Mesh(new THREE.ConeGeometry(0.28, 0.8, 8).rotateX(Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0xffd23f }));
     this.arrow.visible = false;
     s.add(this.arrow);
+    // 手动瞄准时的红色激光线
+    const lg = new THREE.PlaneGeometry(0.08, 1).rotateX(-Math.PI / 2).translate(0, 0, 0.5);
+    this.aimLine = new THREE.Mesh(lg, new THREE.MeshBasicMaterial({ color: 0xff3b30, transparent: true, opacity: 0.55, depthWrite: false, blending: THREE.AdditiveBlending }));
+    this.aimLine.visible = false;
+    s.add(this.aimLine);
   }
 
   addCollider(x, z, r) {
@@ -241,6 +248,13 @@ export class Battle {
 
   setInput(x, z) { this.input.x = x; this.input.z = z; }
 
+  // 右摇杆：on=true 时朝 (x,z) 方向开火；松开后恢复自动瞄准
+  setAim(x, z, on) {
+    const a = this.aimIn;
+    a.on = on && Math.hypot(x, z) > 0.25;
+    if (a.on) { a.x = x; a.z = z; }
+  }
+
   // ---------- 主循环 ----------
   update(dt) {
     if (this.over || this.paused) return;
@@ -339,10 +353,15 @@ export class Battle {
     p.fireCd -= dt;
     if (p.aimT > 0) p.aimT -= dt;
     if (p.fireCd > 0) return;
-    const tgt = this.nearest(p.x, p.z, w.range);
-    if (!tgt) { p.fireCd = 0; return; }
+    let base;
+    if (this.aimIn.on) {
+      base = Math.atan2(this.aimIn.x, this.aimIn.z); // 手动：朝摇杆方向开火
+    } else {
+      const tgt = this.nearest(p.x, p.z, w.range);   // 自动：瞄准最近的丧尸
+      if (!tgt) { p.fireCd = 0; return; }
+      base = Math.atan2(tgt.x - p.x, tgt.z - p.z);
+    }
     p.fireCd = 1 / this.rate;
-    const base = Math.atan2(tgt.x - p.x, tgt.z - p.z);
     p.aim = base; p.aimT = 0.5;
     const n = this.count;
     const arc = w.count > 1 ? w.spread + (n - w.count) * 0.1 : 0.14 * (n - 1);
@@ -438,7 +457,7 @@ export class Battle {
       } else this.dropLoot('scrap', z.x + rand(-0.3, 0.3), z.z + rand(-0.3, 0.3), total);
     }
     if (Math.random() < 0.006) this.dropLoot('med', z.x, z.z, 0.3);
-    if (z === this.boss) { this.boss = null; this.cb.onMsg('尸王被击败！'); sfx.play('boom'); this.shake = 0.6; }
+    if (z === this.boss) { this.boss = null; this.bossKilled = true; this.cb.onMsg('👑 尸王被击败！撤离时获得装备'); sfx.play('boom'); this.shake = 0.6; }
     sfx.play('kill');
   }
 
@@ -696,7 +715,7 @@ export class Battle {
     if (!this.bossSpawned && t >= BOSS_TIME) {
       this.bossSpawned = true;
       this.boss = this.spawnZombie('boss');
-      this.cb.onMsg('☠️ 尸王出现了！');
+      this.cb.onMsg('☠️ 尸王出现了！击败它掉落装备');
       sfx.play('boss');
       this.shake = 0.5;
     }
@@ -741,7 +760,7 @@ export class Battle {
     else if (!retreat) sfx.play('lose');
     this.cb.onEnd({
       win, retreat, zoneIndex: this.zoneIndex, time: this.t, kills: this.kills,
-      scrap: Math.floor(this.scrap), rescued: this.rescued, level: this.level,
+      scrap: Math.floor(this.scrap), rescued: this.rescued, level: this.level, bossKilled: this.bossKilled,
     });
   }
 
@@ -766,6 +785,13 @@ export class Battle {
     u.gun.position.z = 0.62 - p.recoil * 0.12;
     pl.visible = !(p.invuln > 0 && !this.over && Math.floor(p.invuln * 20) % 2 === 0);
     this.pShadow.position.set(p.x, 0.02, p.z);
+    const al = this.aimLine;
+    al.visible = this.aimIn.on && !this.over;
+    if (al.visible) {
+      al.position.set(p.x, 1.0, p.z);
+      al.rotation.y = Math.atan2(this.aimIn.x, this.aimIn.z);
+      al.scale.z = this.w.range;
+    }
 
     // 丧尸
     const zm = this.zMesh, sh = this.shMesh, c = this.tmpC;

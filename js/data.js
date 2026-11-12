@@ -1,7 +1,7 @@
 // 游戏的所有数值配置都在这里，调平衡只改这个文件
 
 // 存档版本号：以后改存档结构时 +1，并在 save.js 的 migrate() 里做兼容
-export const SAVE_V = 1;
+export const SAVE_V = 2; // v2：新增装备（bag / gear）
 
 // 一局时长（秒）：坚持到这个时间就算胜利撤离
 export const BATTLE_TIME = 300;
@@ -67,3 +67,27 @@ export const SURVIVOR_NAMES = [
   '张姐', '阿杰', '林叔', '小敏', '赵哥', '孙婆婆', '豆豆', '黑子', '阿光', '小北',
   '何老师', '阿珍', '马大厨', '小胖',
 ];
+
+// ---------- 装备（击败尸王掉落） ----------
+export const GEAR_SLOTS = [
+  { key: 'head', name: '头盔', icon: '⛑️', main: 'hp',  names: ['破旧头盔', '防暴头盔', '战术头盔', '军用钢盔'] },
+  { key: 'body', name: '护甲', icon: '🦺', main: 'hp',  names: ['皮夹克', '防刺背心', '防弹衣', '重型护甲'] },
+  { key: 'acc',  name: '配件', icon: '🎖️', main: 'dmg', names: ['军牌', '战术背包', '红点瞄具', '夜视仪'] },
+];
+// 品质：mult = 属性倍率，extra = 额外随机属性条数，weight = 基础掉率权重
+export const RARITIES = [
+  { name: '普通', color: '#c9c6b8', mult: 1,   extra: 0, weight: 55 },
+  { name: '精良', color: '#4da3ff', mult: 1.4, extra: 1, weight: 30 },
+  { name: '史诗', color: '#b57bff', mult: 1.9, extra: 1, weight: 12 },
+  { name: '传说', color: '#ff9f2e', mult: 2.6, extra: 2, weight: 3 },
+];
+// 装备属性：base = 普通品质、区域 1 时的数值；zone = 是否随区域变强
+export const GEAR_STATS = {
+  dmg:    { name: '攻击',   base: 0.05, zone: true,  pct: true },
+  hp:     { name: '生命',   base: 15,   zone: true,  pct: false },
+  regen:  { name: '回血/秒', base: 0.3, zone: true,  pct: false },
+  rate:   { name: '射速',   base: 0.04, zone: true,  pct: true },
+  speed:  { name: '移速',   base: 0.03, zone: false, pct: true },
+  pickup: { name: '拾取范围', base: 0.12, zone: false, pct: true },
+};
+export const BAG_SIZE = 20;
