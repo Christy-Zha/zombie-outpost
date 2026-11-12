@@ -1,9 +1,10 @@
 // 主程序：界面切换、按钮事件、摇杆输入、游戏循环
 import * as THREE from '../vendor/three.module.min.js';
-import { BUILDINGS, WEAPONS, ZONES, BATTLE_TIME, GEAR_SLOTS, RARITIES, BAG_SIZE } from './data.js';
+import { BUILDINGS, WEAPONS, ZONES, BATTLE_TIME, GEAR_SLOTS, RARITIES, BAG_SIZE, COMPANIONS, SQUAD_MAX, COMP_MAX_LV, compNeed, compMul, CMD_MAX_LV, cmdNeed, TALENTS, WEAPON_MAX_LV, weaponUpCost } from './data.js';
 import * as S from './save.js';
 import { Battle } from './battle.js';
-import { BaseView } from './base.js';
+import { BaseView, BASE_TEXTURES } from './base.js';
+import { loadEnv } from './env.js';
 import { sfx } from './sfx.js';
 import { CHAPTERS, CAST } from './story.js';
 import { loadModels } from './models.js';
@@ -15,8 +16,15 @@ const mmss = t => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2
 // ---------- 初始化 ----------
 const renderer = new THREE.WebGLRenderer({ canvas: $('gl'), antialias: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.shadowMap.enabled = true;            // 据点里有真实阴影（战斗场景不开投影，省性能）
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.autoUpdate = false;       // 据点是静态的，阴影只在建筑变化时重算一次
+renderer.toneMapping = THREE.ACESFilmicToneMapping; // 电影感的明暗过渡
+renderer.toneMappingExposure = 1.15;
 
-const loadedModels = await loadModels(); // 有 models/*.glb 就用真实模型
+// 启动时并行加载：人物模型（本地有才有）+ 写实场景素材（随仓库发布）
+const BATTLE_TEXTURES = ['brown_mud_leaves_01', 'asphalt_02', 'concrete_floor_01', 'brown_mud', 'concrete_tiles'];
+const [loadedModels] = await Promise.all([loadModels(), loadEnv([...new Set([...BASE_TEXTURES, ...BATTLE_TEXTURES])])]);
 let game = S.load();
 const before = { ...game.store };
 S.tick(game, Date.now());
@@ -90,16 +98,46 @@ function renderBuild() {
 }
 
 function renderPeople() {
-  const n = game.survivors.length, cap = S.survivorCap(game);
+  const n = game.survivors.length, cap = S.survivorCap(game), c = game.cmd, t = S.talent(game);
+  const need = cmdNeed(c.lv);
+  const talents = TALENTS.map(x => {
+    const lv = t[x.key], max = lv >= x.max;
+    return `<div class="tal">
+      <span class="tal-ic">${x.icon}</span>
+      <div class="tal-main"><b>${x.name}</b> <small>${lv}/${x.max}</small><div class="muted">${lv ? x.desc(lv) : '未学习'}${max ? '' : ` → ${x.desc(lv + 1)}`}</div></div>
+      <button class="btn small ${c.pts > 0 && !max ? '' : 'ghost'}" data-tal="${x.key}" ${max ? 'disabled' : ''}>${max ? '满' : '+1'}</button></div>`;
+  }).join('');
+  const comps = S.unlockedComps(game).map(nm => {
+    const d = COMPANIONS[nm], cp = game.comps[nm], inSquad = game.squad.includes(nm);
+    const mul = compMul(cp.lv);
+    return `<div class="card comp ${inSquad ? 'on' : ''}">
+      <div class="card-ic">${d.icon}</div>
+      <div class="card-main">
+        <div class="card-title">${nm}<span class="lv">Lv ${cp.lv} · ${d.role}</span></div>
+        <div class="card-intro">${d.desc}</div>
+        <div class="mini-bar"><i style="width:${cp.lv >= COMP_MAX_LV ? 100 : cp.xp / compNeed(cp.lv) * 100}%"></i></div>
+        <div class="card-eff">生命 ${Math.round(d.hp * mul)} · 伤害 ×${mul.toFixed(2)}</div>
+      </div>
+      <div class="comp-btns">
+        <button class="btn small ${inSquad ? '' : 'ghost'}" data-squad="${nm}">${inSquad ? '✓ 出战' : '出战'}</button>
+        <button class="btn small ghost" data-train="${nm}">训练<br><small>🌽${S.trainCost(game)}</small></button>
+      </div></div>`;
+  }).join('');
   $('tab-people').innerHTML = `
-    <div class="info-box">👥 幸存者 <b>${n}/${cap}</b><br>
-      每位幸存者：资源产量 <b>+8%</b>，攻击 <b>+2%</b><br>
-      <small class="muted">出征时，地图上的黄色光柱是求救的幸存者，跑过去就能救回来</small></div>
+    <div class="info-box cmd">
+      <div>🎖️ 指挥官 <b>Lv ${c.lv}</b>　天赋点 <b>${c.pts}</b></div>
+      <div class="mini-bar"><i style="width:${c.lv >= CMD_MAX_LV ? 100 : c.xp / need * 100}%"></i></div>
+      <small class="muted">经验 ${c.xp}/${need} · 每次出征都会积累经验，每升 1 级得 1 个天赋点</small>
+    </div>
+    <div class="section-title">天赋（永久加成）<button class="link" id="btnResetTal">重置（🔩${S.resetTalentCost(game)}）</button></div>
+    <div class="tals">${talents}</div>
+    <div class="section-title">队友（出征最多带 ${SQUAD_MAX} 人：${game.squad.join('、') || '还没选'}）</div>
+    ${comps || '<div class="muted" style="padding:8px">推进主线剧情，同伴会加入成为队友（第一章结束后陈医生加入）</div>'}
+    <div class="section-title">据点成员 ${n}/${cap}（每人：产量 +8%，攻击 +2%）</div>
     <button class="btn big" id="btnRecruit" ${n >= cap ? 'disabled' : ''}>${n >= cap ? '宿舍住满了' : '招募幸存者'}<small>🌽 ${S.recruitCost(game)}</small></button>
-    <div class="section-title">据点成员</div>
-    <div class="chips">${game.survivors.map(nm => `<span class="chip">🧑 ${nm}</span>`).join('') || '<span class="muted">据点里还没有人……</span>'}</div>
+    <div class="chips">${game.survivors.map(nm => `<span class="chip">${COMPANIONS[nm] ? COMPANIONS[nm].icon : '🧑'} ${nm}</span>`).join('') || '<span class="muted">据点里还没有人……</span>'}</div>
     <div class="section-title">战绩</div>
-    <div class="muted" style="font-size:13px">出征 ${game.stats.runs} 次 · 累计击杀 ${fmt(game.stats.kills)} 只丧尸</div>`;
+    <div class="muted" style="font-size:13px">出征 ${game.stats.runs} 次 · 累计击杀 ${fmt(game.stats.kills)} 只丧尸 · 击败尸王 ${game.stats.bossKills} 次</div>`;
 }
 
 function renderGo() {
@@ -118,20 +156,30 @@ function renderGo() {
     return `<button class="weap ${k === game.weapon ? 'sel' : ''} ${lock ? 'locked' : ''}" data-weap="${k}">
       <b>${w.icon} ${w.name}</b><small>${lock ? `军械库 Lv${w.armory} 解锁` : w.desc}</small></button>`;
   }).join('');
-  const chapters = CHAPTERS.map((c, i) => {
-    const locked = i > game.story.done, done = i < game.story.done;
-    return `<div class="zone story ${locked ? 'locked' : ''}" data-chapter="${i}">
-      <div class="zone-main">
-        <div class="zone-name">${locked ? '🔒' : done ? '✅' : '🔦'} ${c.title}</div>
-        <div class="zone-desc">${locked ? '先完成上一章' : `深夜 · 弹药有限 · 找到 ${c.obj.count} 个${c.obj.name}${c.boss ? ' · ☠️ 强敌' : ''}`}</div>
-        <div class="zone-meta">${done ? `重玩奖励 🔩${Math.round(c.reward.scrap * 0.3)}` : `奖励 🔩${c.reward.scrap}${c.reward.survivor ? ` · 同伴「${c.reward.survivor}」加入` : ''}`}</div>
-      </div>${locked ? '' : '<span class="zone-go">进入 ▶</span>'}</div>`;
+  const TYPE = { collect: '🔍 搜集', defend: '🛡️ 坚守', rescue: '🆘 营救', boss: '☠️ 强敌' };
+  let gi = 0;
+  const chapters = CHAPTERS.map(c => {
+    const first = gi;
+    const rows = c.stages.map((stg, si) => {
+      const i = gi++, locked = i > game.story.stage, done = i < game.story.stage;
+      const full = Math.round(c.reward.scrap * (S.STAGE_SHARE[si] || 0.35));
+      return `<div class="stage ${locked ? 'locked' : ''} ${done ? 'done' : ''}" data-stage="${i}">
+        <div class="zone-main"><b>${locked ? '🔒' : done ? '✅' : '🔦'} ${stg.title}</b>
+          <div class="zone-meta">${TYPE[stg.type]} · ${done ? `重玩 🔩${Math.round(full * 0.25)}` : `🔩${full}${si === c.stages.length - 1 && c.reward.survivor ? ` · 「${c.reward.survivor}」加入` : ''}`}</div></div>
+        ${locked ? '' : '<span class="zone-go">进入</span>'}</div>`;
+    }).join('');
+    const doneAll = game.story.stage >= gi, open = game.story.stage >= first;
+    return `<div class="chapter ${open ? '' : 'locked'}"><div class="ch-title">${doneAll ? '✅' : open ? '📖' : '🔒'} ${c.title}</div>${open ? rows : '<div class="muted" style="padding:4px 2px 8px">完成上一章解锁</div>'}</div>`;
   }).join('');
+  const total = gi;
+  const squad = S.unlockedComps(game).map(nm => `<button class="sq ${game.squad.includes(nm) ? 'sel' : ''}" data-squad="${nm}">${COMPANIONS[nm].icon} ${nm}<small>Lv${game.comps[nm].lv}</small></button>`).join('');
   $('tab-go').innerHTML = `
     <div class="section-title">① 选择武器</div><div class="weapons">${weaps}</div>
-    <div class="stat-line">攻击 ×${st.dmgMul.toFixed(2)} · 生命 ${st.maxHp} · 回血 ${st.regen.toFixed(1)}/秒</div>
-    <div class="section-title">② 📖 主线剧情《启明之殇》 ${game.story.done}/${CHAPTERS.length}</div>${chapters}
-    <div class="section-title">③ ☠️ 自由出征（坚持 ${BATTLE_TIME / 60} 分钟撤离，刷物资和装备）</div>${zones}`;
+    <div class="section-title">② 带队友（最多 ${SQUAD_MAX} 人）</div>
+    <div class="squad">${squad || '<span class="muted">推进剧情解锁队友</span>'}</div>
+    <div class="stat-line">攻击 ×${st.dmgMul.toFixed(2)} · 生命 ${st.maxHp} · 回血 ${st.regen.toFixed(1)}/秒 · 武器 Lv${game.weaponLv[game.weapon] || 0}</div>
+    <div class="section-title">③ 📖 主线剧情《启明之殇》 ${game.story.stage}/${total} 关</div>${chapters}
+    <div class="section-title">④ ☠️ 自由出征（坚持 ${BATTLE_TIME / 60} 分钟撤离，刷物资和装备）</div>${zones}`;
 }
 
 const slotIcon = k => GEAR_SLOTS.find(x => x.key === k).icon;
@@ -156,13 +204,24 @@ function renderGear() {
       <button class="btn ${on ? 'ghost' : ''}" data-equip="${it.id}">${on ? '卸下' : '装备'}</button>
       <button class="btn ghost" data-dis="${it.id}">分解<br><small>🔩${S.dismantleValue(it)}</small></button></div>`;
   }).join('');
-  $('tab-gear').innerHTML = `<div class="slots">${slots}</div>
+  const wup = Object.entries(WEAPONS).map(([k, w]) => {
+    const lv = game.weaponLv[k] || 0, lock = !S.weaponUnlocked(game, k), max = lv >= WEAPON_MAX_LV, chk = S.checkWeaponUp(game, k);
+    return `<div class="tal">
+      <span class="tal-ic">${w.icon}</span>
+      <div class="tal-main"><b>${w.name}</b> <small>+${lv}</small><div class="muted">${lock ? `军械库 Lv${w.armory} 解锁` : `伤害 +${lv * 10}% · 射速 +${(lv * 2.5).toFixed(1)}%`}</div></div>
+      <button class="btn small ${chk.ok ? '' : 'ghost'}" data-wup="${k}" ${lock || max ? 'disabled' : ''}>${max ? '满级' : `强化<br><small>🔩${fmt(weaponUpCost(k, lv))}</small>`}</button></div>`;
+  }).join('');
+  $('tab-gear').innerHTML = `<div class="section-title" style="margin-top:0">🔧 武器强化（等级上限 = 军械库等级 + 2）</div><div class="tals">${wup}</div>
+    <div class="section-title">🎒 装备（击败尸王 / 剧情强敌掉落）</div>
+    <div class="slots">${slots}</div>
     <div class="stat-line">${total ? '装备加成：' + total : '击败尸王会掉落装备，品质有 普通 / 精良 / 史诗 / 传说'}</div>
     <div class="section-title">背包 ${game.bag.length}/${BAG_SIZE}（满了以后新装备会自动分解）</div>
     ${items || '<div class="muted" style="text-align:center;padding:20px">背包是空的。去出征，在第 4 分钟击败尸王吧！</div>'}`;
 }
 
 $('tab-gear').addEventListener('click', e => {
+  const wu = e.target.closest('[data-wup]');
+  if (wu) { const r = S.weaponUp(game, wu.dataset.wup); if (!r.ok) toast(r.reason); else { sfx.play('build'); toast(`${WEAPONS[wu.dataset.wup].name} 强化到 +${r.lv}`); } save(); renderAll(); return; }
   const eq = e.target.closest('[data-equip]');
   if (eq) { S.equip(game, +eq.dataset.equip); sfx.play('build'); save(); renderGear(); return; }
   const d = e.target.closest('[data-dis]');
@@ -219,6 +278,13 @@ $('tab-build').addEventListener('click', e => {
 });
 
 $('tab-people').addEventListener('click', e => {
+  const tal = e.target.closest('[data-tal]');
+  if (tal) { const r = S.learnTalent(game, tal.dataset.tal); if (!r.ok) toast(r.reason); else sfx.play('build'); save(); renderPeople(); return; }
+  if (e.target.closest('#btnResetTal')) { const r = S.resetTalents(game); toast(r.ok ? `已返还 ${r.pts} 个天赋点` : r.reason); save(); renderAll(); return; }
+  const sq = e.target.closest('[data-squad]');
+  if (sq) { const r = S.toggleSquad(game, sq.dataset.squad); if (!r.ok) toast(r.reason); sfx.play('click'); save(); renderPeople(); return; }
+  const tr = e.target.closest('[data-train]');
+  if (tr) { const r = S.trainComp(game, tr.dataset.train); if (!r.ok) toast(r.reason); else { sfx.play('build'); toast(r.ups ? `${tr.dataset.train} 升到 Lv${r.lv}！` : '训练完成，经验增加'); } save(); renderAll(); return; }
   if (!e.target.closest('#btnRecruit')) return;
   const r = S.recruit(game);
   if (!r.ok) { toast(r.reason); return; }
@@ -230,14 +296,17 @@ $('tab-people').addEventListener('click', e => {
 });
 
 $('tab-go').addEventListener('click', e => {
-  const ch = e.target.closest('[data-chapter]');
-  if (ch) {
-    const i = +ch.dataset.chapter;
-    if (i > game.story.done) { toast('先完成上一章'); return; }
+  const stg = e.target.closest('[data-stage]');
+  if (stg) {
+    const i = +stg.dataset.stage;
+    if (i > game.story.stage) { toast('先通关上一关'); return; }
+    const { ch, si, st } = S.stageAt(i);
     sfx.play('click');
-    playDialogue(CHAPTERS[i].intro, () => startBattle({ chapter: i }));
+    playDialogue(si === 0 ? [...ch.intro, ...st.intro] : st.intro, () => startBattle({ stage: i }));
     return;
   }
+  const sq = e.target.closest('[data-squad]');
+  if (sq) { const r = S.toggleSquad(game, sq.dataset.squad); if (!r.ok) toast(r.reason); sfx.play('click'); save(); renderGo(); return; }
   const z = e.target.closest('[data-zone]');
   if (z) {
     const i = +z.dataset.zone;
@@ -329,15 +398,17 @@ $('dlg').addEventListener('click', e => {
 // ---------- 战斗 ----------
 const joyIn = { x: 0, z: 0, on: false }, aimIn = { x: 0, z: 0, on: false }, keys = {};
 
-function startBattle({ chapter = null } = {}) {
+function startBattle({ stage = null } = {}) {
   sfx.unlock();
   S.tick(game, Date.now());
   save();
-  const story = chapter === null ? null : { ...CHAPTERS[chapter], index: chapter };
+  let story = null;
+  if (stage !== null) { const { ch, st } = S.stageAt(stage); story = { ...st, index: stage, zone: ch.zone, chapterTitle: ch.title }; }
   battle = new Battle({
-    zoneIndex: story ? story.zone : game.zone, weaponKey: game.weapon, stats: S.battleStats(game),
-    cb: { onHud, onLevelUp, onEnd, onMsg, onHurt }, story,
+    zoneIndex: story ? story.zone : game.zone, weaponKey: game.weapon, stats: S.battleStats(game, game.weapon),
+    cb: { onHud, onLevelUp, onEnd, onMsg, onHurt, onRadio }, story,
   });
+  $('hRadio').classList.remove('show');
   $('sSurv').classList.toggle('hidden', !!story);
   $('sAmmo').classList.toggle('hidden', !story);
   $('hObj').classList.toggle('hidden', !story);
@@ -347,7 +418,7 @@ function startBattle({ chapter = null } = {}) {
   $('battleUI').classList.remove('hidden');
   $('bossBar').classList.add('hidden');
   onHud(battle.hudData());
-  onMsg(story ? `${story.title}：找到 ${story.obj.count} 个${story.obj.name}` : `${ZONES[game.zone].name}：会自动开枪，右边拖动可以手动瞄准`);
+  onMsg(story ? `${story.title}：${battle.objText()}` : `${ZONES[game.zone].name}：会自动开枪，右边拖动可以手动瞄准`);
   $('joyHint').classList.remove('off');
   setTimeout(() => $('joyHint').classList.add('off'), 6000);
 }
@@ -374,6 +445,7 @@ function onHud(d) {
     $('sAmmo').style.color = d.ammo <= 10 ? '#ff6b5b' : '';
     $('hObj').textContent = d.obj;
   }
+  $('hSquad').innerHTML = d.allies.map(a => `<div class="sq-hud ${a.down ? 'down' : ''}"><span>${a.icon} ${a.name}${a.down ? (a.revive > 0 ? ' 扶起中…' : ' 倒地') : ''}</span><i style="width:${a.down ? a.revive / 2 * 100 : a.hp / a.max * 100}%"></i></div>`).join('');
   $('hKills').textContent = d.kills;
   $('hScrap').textContent = d.scrap;
   $('hSurv').textContent = d.rescued;
@@ -388,6 +460,16 @@ function onMsg(text) {
   el.classList.remove('show');
   void el.offsetWidth; // 重新触发动画
   el.classList.add('show');
+}
+
+// 无线电字幕：不打断战斗，显示 4 秒
+let radioTimer = 0;
+function onRadio(who, text) {
+  const el = $('hRadio');
+  el.innerHTML = `<b style="color:${(CAST[who] && CAST[who].color) || '#fff'}">${who || '旁白'}</b>　${text}`;
+  el.classList.add('show');
+  clearTimeout(radioTimer);
+  radioTimer = setTimeout(() => el.classList.remove('show'), 4200);
 }
 
 function onHurt() {
@@ -422,9 +504,12 @@ function onEnd(r) {
       <div class="item-st">${itemStats(it)}</div>
       ${sum.itemScrap ? `<div class="muted">背包满了，已自动分解为 🔩${sum.itemScrap}</div>` : '<div class="muted">已放进背包，去「装备」页穿上</div>'}</div>`;
   } else if (r.win) drop = '<p class="muted">💡 撤离前击败尸王，可以获得装备</p>';
+  const isStory = r.story !== null && r.story !== undefined;
+  const stInfo = isStory ? S.stageAt(r.story) : null, nextSt = isStory ? S.stageAt(game.story.stage) : null;
   const storyLine = sum.storyFirst
-    ? `<p class="good">📖 ${CHAPTERS[r.story].title} 完成！</p>${sum.storyJoin ? `<p class="good">🧑 「${sum.storyJoin}」加入了据点</p>` : ''}${game.story.done < CHAPTERS.length ? `<p class="muted">下一章：${CHAPTERS[game.story.done].title}</p>` : ''}`
-    : (r.story !== null && !r.win ? '<p class="muted">💡 剧情关卡弹药有限：多捡绿色弹药箱，别乱开枪</p>' : '');
+    ? `<p class="good">📖 ${stInfo.st.title} 通关！${sum.chapterDone ? `「${stInfo.ch.title}」完成！` : ''}</p>${sum.storyJoin ? `<p class="good">🧑 「${sum.storyJoin}」加入了据点，可以带着出征了</p>` : ''}${nextSt ? `<p class="muted">下一关：${nextSt.st.title}</p>` : '<p class="good">🏆 主线全部通关！</p>'}`
+    : (isStory && !r.win ? '<p class="muted">💡 打不过就回据点：升级军械库、强化武器、加天赋、带队友</p>' : '');
+  const growth = `<p class="muted">🎖️ 指挥官经验 +${sum.cmdXp}${sum.cmdUps ? `，<b class="good">升到 Lv${game.cmd.lv}（天赋点 +${sum.cmdUps}）</b>` : ''}${Object.entries(sum.compUps).filter(([, u]) => u).map(([nm]) => `，${nm} 升到 Lv${game.comps[nm].lv}`).join('')}</p>`;
   const showResult = () => setTimeout(() => {
     showModal(`<h2>${title}</h2>
       <div class="result">
@@ -432,10 +517,10 @@ function onEnd(r) {
         <div>击杀<b>${r.kills}</b></div>
         <div>带回物资<b>🔩 ${r.scrap}${sum.bonus ? ` + ${sum.bonus}` : ''}</b></div>
         <div>救出幸存者<b>${r.rescued}</b></div>
-      </div>${sum.bonus ? `<p class="good">${r.story !== null ? '章节奖励' : '撤离奖励'} 🔩${sum.bonus}${sum.firstClear ? '（首通双倍）' : ''}</p>` : ''}${storyLine}${drop}${next}${surv}${food}${r.story !== null ? '' : tip}
+      </div>${sum.bonus ? `<p class="good">${isStory ? '关卡奖励' : '撤离奖励'} 🔩${sum.bonus}${sum.firstClear ? '（首通双倍）' : ''}${sum.lootBonus ? ` · 拾荒 +${sum.lootBonus}` : ''}</p>` : ''}${storyLine}${growth}${drop}${next}${surv}${food}${isStory ? '' : tip}
       <button class="btn big" data-act="home">返回据点</button>`, 500);
   }, r.win || r.retreat ? 200 : 900);
-  if (r.story !== null && r.win) setTimeout(() => playDialogue(CHAPTERS[r.story].outro, showResult), 600);
+  if (isStory && r.win) setTimeout(() => playDialogue(sum.chapterDone ? [...stInfo.st.outro, ...stInfo.ch.outro] : stInfo.st.outro, showResult), 600);
   else showResult();
 }
 
@@ -569,6 +654,7 @@ function frame(now) {
     battle.render(renderer, dt);
   } else {
     baseView.update(dt);
+    if (baseView.shadowDirty) { renderer.shadowMap.needsUpdate = true; baseView.shadowDirty = false; }
     renderer.render(baseView.scene, baseView.camera);
   }
 }

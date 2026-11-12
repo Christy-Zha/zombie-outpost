@@ -2,3 +2,5 @@ shots/
 __pycache__/
 _model_research/
 models_src/
+# Mixamo 转换的模型不进公开仓库（授权原因），本地有就用，没有就显示方块人
+models/*.glb

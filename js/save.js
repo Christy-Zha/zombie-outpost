@@ -1,5 +1,6 @@
 // 存档与经济系统（纯逻辑，不依赖画面，可以单独用 node 测试）
-import { BUILDINGS, WEAPONS, ZONES, SAVE_V, SURVIVOR_NAMES, STORE_HOURS, GEAR_SLOTS, RARITIES, GEAR_STATS, BAG_SIZE } from './data.js';
+import { BUILDINGS, WEAPONS, ZONES, SAVE_V, SURVIVOR_NAMES, STORE_HOURS, GEAR_SLOTS, RARITIES, GEAR_STATS, BAG_SIZE,
+  COMPANIONS, SQUAD_MAX, COMP_MAX_LV, compNeed, compMul, CMD_MAX_LV, cmdNeed, TALENTS, WEAPON_MAX_LV, weaponUpCost, weaponMul } from './data.js';
 import { CHAPTERS } from './story.js';
 
 export const SAVE_KEY = 'zombie-outpost-save';
@@ -25,7 +26,11 @@ export function defaultSave(now = Date.now()) {
     bag: [],                                  // 背包里的装备
     gear: { head: null, body: null, acc: null }, // 已穿戴装备的 id
     nextItemId: 1,
-    story: { done: 0 },   // 已完成的剧情章节数
+    story: { stage: 0 },  // 已通关的剧情关卡数（0~15，每章 3 关）
+    cmd: { lv: 1, xp: 0, pts: 0, talents: {} }, // 指挥官等级 / 天赋
+    weaponLv: { pistol: 0, shotgun: 0, smg: 0, rifle: 0 }, // 武器强化等级
+    comps: {},            // 队友成长：名字 → { lv, xp }
+    squad: [],            // 出征带的队友（最多 2 人）
   };
 }
 
@@ -45,9 +50,18 @@ export function migrate(d, now = Date.now()) {
   for (const k of Object.keys(s.gear)) if (s.gear[k] !== null && !s.bag.some(it => it.id === s.gear[k])) s.gear[k] = null;
   if (typeof s.nextItemId !== 'number') s.nextItemId = s.bag.reduce((m, it) => Math.max(m, it.id + 1), 1);
   if (typeof s.stats.bossKills !== 'number') s.stats.bossKills = 0;
-  // v2 → v3：补上剧情进度
-  s.story = { ...def.story, ...(d.story || {}) };
-  s.story.done = Math.max(0, Math.min(CHAPTERS.length, s.story.done | 0));
+  // v2 → v3 → v4：剧情进度从“章”改成“关”（每章 3 关）
+  const st = d.story || {};
+  const total = CHAPTERS.reduce((n, c) => n + c.stages.length, 0);
+  s.story = { stage: typeof st.stage === 'number' ? st.stage : (st.done | 0) * 3 };
+  s.story.stage = Math.max(0, Math.min(total, s.story.stage | 0));
+  // v4：指挥官 / 武器强化 / 队友
+  s.cmd = { ...def.cmd, ...(d.cmd || {}) };
+  s.cmd.talents = { ...(s.cmd.talents || {}) };
+  s.weaponLv = { ...def.weaponLv, ...(d.weaponLv || {}) };
+  s.comps = { ...(d.comps || {}) };
+  for (const n of Object.keys(COMPANIONS)) if (s.survivors.includes(n) && !s.comps[n]) s.comps[n] = { lv: 1, xp: 0 };
+  s.squad = (Array.isArray(d.squad) ? d.squad : []).filter(n => s.comps[n]).slice(0, SQUAD_MAX);
   if (!WEAPONS[s.weapon]) s.weapon = 'pistol';
   if (typeof s.lastTick !== 'number') s.lastTick = now;
   s.cleared = Math.max(0, Math.min(ZONES.length, s.cleared | 0));
@@ -153,18 +167,114 @@ export function upgrade(s, key, now = Date.now()) {
 }
 
 // ---------- 战斗相关 ----------
-export function battleStats(s) {
-  const b = s.buildings, n = s.survivors.length, g = gearTotals(s);
+export function battleStats(s, weaponKey = s.weapon) {
+  const b = s.buildings, n = s.survivors.length, g = gearTotals(s), t = talent(s), w = weaponMul(s.weaponLv[weaponKey] || 0);
   return {
-    dmgMul: (1 + 0.1 * b.armory) * (1 + 0.02 * n) * (1 + g.dmg),
-    maxHp: Math.round(100 + 20 * b.gym + g.hp),
-    regen: 0.4 * b.clinic + g.regen,
+    dmgMul: (1 + 0.1 * b.armory) * (1 + 0.02 * n) * (1 + g.dmg) * (1 + 0.05 * t.gun) * w.dmg,
+    maxHp: Math.round((100 + 20 * b.gym + g.hp) * (1 + 0.06 * t.hp)),
+    regen: 0.4 * b.clinic + g.regen + 0.25 * t.aid,
     xpMul: 1 + 0.08 * b.radio,
     pickupMul: 1 + g.pickup,
-    rateMul: 1 + g.rate,
-    speedMul: 1 + g.speed,
+    rateMul: (1 + g.rate) * w.rate,
+    speedMul: (1 + g.speed) * (1 + 0.02 * t.move),
+    ammoMul: 1 + 0.08 * t.ammo,
+    lootMul: 1 + 0.06 * t.loot,
+    squad: s.squad.filter(nm => s.comps[nm]).map(nm => ({ name: nm, lv: s.comps[nm].lv, mul: compMul(s.comps[nm].lv) * (1 + 0.08 * t.lead) })),
   };
 }
+
+// ---------- 指挥官 / 天赋 ----------
+export function talent(s) {
+  const t = {};
+  for (const x of TALENTS) t[x.key] = (s.cmd.talents[x.key] | 0);
+  return t;
+}
+export function addCmdXp(s, xp) {
+  const c = s.cmd;
+  let ups = 0;
+  c.xp += Math.round(xp);
+  while (c.lv < CMD_MAX_LV && c.xp >= cmdNeed(c.lv)) { c.xp -= cmdNeed(c.lv); c.lv++; c.pts++; ups++; }
+  if (c.lv >= CMD_MAX_LV) c.xp = 0;
+  return ups;
+}
+export function learnTalent(s, key) {
+  const def = TALENTS.find(x => x.key === key), c = s.cmd;
+  if (!def) return { ok: false, reason: '没有这个天赋' };
+  if ((c.talents[key] | 0) >= def.max) return { ok: false, reason: '已经满级了' };
+  if (c.pts <= 0) return { ok: false, reason: '天赋点不够（指挥官升级获得）' };
+  c.pts--; c.talents[key] = (c.talents[key] | 0) + 1;
+  return { ok: true, lv: c.talents[key] };
+}
+// 重置天赋：返还全部点数，花费物资
+export const resetTalentCost = s => 200 + 50 * s.cmd.lv;
+export function resetTalents(s) {
+  const spent = Object.values(s.cmd.talents).reduce((a, b) => a + (b | 0), 0);
+  if (!spent) return { ok: false, reason: '还没有加过天赋' };
+  const c = resetTalentCost(s);
+  if (s.scrap < c) return { ok: false, reason: `物资不够（还差 ${c - Math.floor(s.scrap)}）` };
+  s.scrap -= c; s.cmd.pts += spent; s.cmd.talents = {};
+  return { ok: true, pts: spent };
+}
+
+// ---------- 武器强化 ----------
+export function checkWeaponUp(s, key) {
+  const lv = s.weaponLv[key] | 0;
+  if (!weaponUnlocked(s, key)) return { ok: false, reason: `需要军械库 Lv${WEAPONS[key].armory}` };
+  if (lv >= WEAPON_MAX_LV) return { ok: false, reason: '已经满级了' };
+  if (lv >= s.buildings.armory + 2) return { ok: false, reason: `先把军械库升到 Lv${lv - 1}` }; // 强化等级不能超过军械库 +2
+  const c = weaponUpCost(key, lv);
+  if (s.scrap < c) return { ok: false, reason: `物资不够（还差 ${c - Math.floor(s.scrap)}）`, cost: c };
+  return { ok: true, cost: c };
+}
+export function weaponUp(s, key) {
+  const r = checkWeaponUp(s, key);
+  if (!r.ok) return r;
+  s.scrap -= r.cost; s.weaponLv[key] = (s.weaponLv[key] | 0) + 1;
+  return { ...r, lv: s.weaponLv[key] };
+}
+
+// ---------- 队友 ----------
+export const unlockedComps = s => Object.keys(COMPANIONS).filter(n => s.comps[n]);
+export function toggleSquad(s, name) {
+  if (!s.comps[name]) return { ok: false, reason: '还没有这个队友' };
+  const i = s.squad.indexOf(name);
+  if (i >= 0) { s.squad.splice(i, 1); return { ok: true, on: false }; }
+  if (s.squad.length >= SQUAD_MAX) return { ok: false, reason: `最多带 ${SQUAD_MAX} 名队友` };
+  s.squad.push(name);
+  return { ok: true, on: true };
+}
+export function addCompXp(s, name, xp) {
+  const c = s.comps[name];
+  if (!c) return 0;
+  let ups = 0;
+  c.xp += Math.round(xp);
+  while (c.lv < COMP_MAX_LV && c.xp >= compNeed(c.lv)) { c.xp -= compNeed(c.lv); c.lv++; ups++; }
+  if (c.lv >= COMP_MAX_LV) c.xp = 0;
+  return ups;
+}
+// 用食物训练队友（食物的去处之一）
+export const trainCost = s => 25 + 5 * Object.values(s.comps).reduce((a, c) => a + c.lv, 0);
+export function trainComp(s, name) {
+  const c = s.comps[name];
+  if (!c) return { ok: false, reason: '还没有这个队友' };
+  if (c.lv >= COMP_MAX_LV) return { ok: false, reason: '已经满级了' };
+  const cost = trainCost(s);
+  if (s.food < cost) return { ok: false, reason: `食物不够（还差 ${Math.ceil(cost - s.food)}）` };
+  s.food -= cost;
+  const ups = addCompXp(s, name, 40 + c.lv * 8);
+  return { ok: true, ups, lv: c.lv };
+}
+
+// ---------- 剧情关卡 ----------
+export function stageAt(i) {
+  let k = i;
+  for (let c = 0; c < CHAPTERS.length; c++) {
+    if (k < CHAPTERS[c].stages.length) return { c, si: k, ch: CHAPTERS[c], st: CHAPTERS[c].stages[k] };
+    k -= CHAPTERS[c].stages.length;
+  }
+  return null;
+}
+export const STAGE_SHARE = [0.35, 0.35, 0.7]; // 每关奖励 = 章节奖励 × 比例
 
 // ---------- 装备 ----------
 const SLOT = Object.fromEntries(GEAR_SLOTS.map(x => [x.key, x]));
@@ -245,15 +355,19 @@ export function applyResult(s, r) {
   let bonus = 0, firstClear = false;
   const isStory = r.story !== null && r.story !== undefined;
   let storyFirst = false, storyJoin = null;
+  let chapterDone = false;
   if (isStory && r.win) {
-    // 剧情章节：首次通关给全额奖励和同伴，重玩给 30%
-    const ch = CHAPTERS[r.story];
-    storyFirst = r.story === s.story.done;
-    bonus = storyFirst ? ch.reward.scrap : Math.round(ch.reward.scrap * 0.3);
+    // 剧情关卡：首次通关给全额奖励，重玩给 25%；每章最后一关通关后同伴加入
+    const { ch, si } = stageAt(r.story);
+    const full = Math.round(ch.reward.scrap * (STAGE_SHARE[si] || 0.35));
+    storyFirst = r.story === s.story.stage;
+    bonus = storyFirst ? full : Math.round(full * 0.25);
     if (storyFirst) {
-      s.story.done++;
-      const nm = ch.reward.survivor;
+      s.story.stage++;
+      chapterDone = si === ch.stages.length - 1;
+      const nm = chapterDone ? ch.reward.survivor : null;
       if (nm && !s.survivors.includes(nm)) { s.survivors.push(nm); storyJoin = nm; } // 剧情同伴不占宿舍名额限制
+      if (nm && COMPANIONS[nm] && !s.comps[nm]) s.comps[nm] = { lv: 1, xp: 0 };
     }
   } else if (r.win) {
     bonus = Math.round(100 * zone.reward);
@@ -285,8 +399,17 @@ export function applyResult(s, r) {
     if (!put.stored) itemScrap = put.scrap;
     s.stats.bossKills++;
   }
+  // 天赋“拾荒”：带回的物资更多
+  const lootMul = 1 + 0.06 * talent(s).loot;
+  const lootBonus = Math.round(r.scrap * (lootMul - 1));
+  s.scrap += lootBonus;
+  // 经验：指挥官 + 随队队友
+  const cmdXp = r.kills * 1 + (r.win ? 60 + 40 * (isStory ? 2 : r.zoneIndex) : 20) + (storyFirst ? 120 : 0);
+  const cmdUps = addCmdXp(s, cmdXp);
+  const compUps = {};
+  for (const nm of r.squad || []) compUps[nm] = addCompXp(s, nm, 20 + r.kills * 0.6 + (r.win ? 40 : 0));
   s.stats.runs++;
   s.stats.kills += r.kills;
   s.stats.best[r.zoneIndex] = Math.max(s.stats.best[r.zoneIndex] || 0, Math.floor(r.time));
-  return { bonus, firstClear, joined, extraFood, item, itemScrap, storyFirst, storyJoin };
+  return { bonus, firstClear, joined, extraFood, item, itemScrap, storyFirst, storyJoin, chapterDone, lootBonus, cmdXp, cmdUps, compUps };
 }

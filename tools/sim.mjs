@@ -15,7 +15,7 @@ await sleep(2500);
 await ev(`(async () => { for (const r of await navigator.serviceWorker.getRegistrations()) await r.unregister(); for (const k of await caches.keys()) await caches.delete(k); return true; })()`);
 await send('Network.enable');
 await send('Network.setCacheDisabled', { cacheDisabled: true });
-await send('Page.navigate', { url: 'http://127.0.0.1:8765/blank.html' });
+await send('Page.navigate', { url: 'http://127.0.0.1:8765/tools/sim.html' });
 await sleep(1000);
 
 // 不同基地配置：新手 / 中期
@@ -26,8 +26,8 @@ const setups = [
 ];
 for (const st of setups) {
   const res = await ev(`(async () => {
-    const { Battle } = await import('./js/battle.js');
-    const S = await import('./js/save.js');
+    const { Battle } = await import('../js/battle.js');
+    const S = await import('../js/save.js');
     const out = [];
     for (let run = 0; run < 3; run++) {
       const g = S.defaultSave();

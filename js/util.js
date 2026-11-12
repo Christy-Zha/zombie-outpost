@@ -114,10 +114,12 @@ export function groundTexture(hex, repeat = 30) {
 // 释放场景占用的显存
 export function disposeScene(scene) {
   scene.traverse(o => {
-    if (o.geometry) o.geometry.dispose();
+    if (o.geometry && !o.geometry.userData.keep) o.geometry.dispose();
     if (o.material) {
       for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
-        if (m.map) m.map.dispose();
+        if (m.userData.keep) continue; // 共享素材（写实道具）保留
+        if (m.map && !m.map.userData.keep) m.map.dispose();
+        if (m.normalMap && !m.normalMap.userData.keep) m.normalMap.dispose();
         m.dispose();
       }
     }

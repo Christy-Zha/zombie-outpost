@@ -79,6 +79,12 @@ export class Rig {
     this.cur = a;
   }
 
+  // 染色：保留贴图细节，整体偏向某种颜色（用来区分不同的幸存者/队友）
+  tint(hex, amount = 0.45) {
+    const c = new THREE.Color(1, 1, 1).lerp(new THREE.Color(hex), amount);
+    for (const m of this.mats) m.color.copy(c);
+  }
+
   flash(t = 0.1) { this.flashT = t; }
 
   setOpacity(v) {

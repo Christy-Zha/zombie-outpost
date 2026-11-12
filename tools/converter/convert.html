@@ -29,6 +29,28 @@ function countTris(root) {
   return Math.round(n);
 }
 
+// 删掉减面后没被用到的顶点（否则文件里还留着全部顶点数据）
+function compactGeometry(g) {
+  const idx = g.index.array, count = g.attributes.position.count;
+  const map = new Int32Array(count).fill(-1);
+  const newIdx = new Uint32Array(idx.length);
+  let n = 0;
+  for (let i = 0; i < idx.length; i++) { const v = idx[i]; if (map[v] < 0) map[v] = n++; newIdx[i] = map[v]; }
+  for (const name of Object.keys(g.attributes)) {
+    const a = g.attributes[name], k = a.itemSize;
+    const arr = new (a.array.constructor)(n * k);
+    for (let v = 0; v < count; v++) {
+      const t = map[v];
+      if (t < 0) continue;
+      for (let c = 0; c < k; c++) arr[t * k + c] = a.getComponent(v, c);
+    }
+    g.setAttribute(name, new THREE.BufferAttribute(arr, k, a.normalized));
+  }
+  g.morphAttributes = {};
+  g.setIndex(new THREE.BufferAttribute(newIdx, 1));
+  return g;
+}
+
 // 减面：保持外形，把三角面减到 target 左右（只删三角形、不动顶点，所以骨骼权重和贴图坐标都保留）
 async function simplifyAll(root, target) {
   const total = countTris(root);
@@ -53,7 +75,7 @@ async function simplifyAll(root, target) {
     g.setIndex(new THREE.BufferAttribute(new Uint32Array(out), 1));
     g.clearGroups();
     if (groups.length) for (const ng of newGroups) g.addGroup(ng.start, ng.count, ng.materialIndex);
-    m.geometry = g;
+    m.geometry = compactGeometry(g);
   });
   return countTris(root);
 }

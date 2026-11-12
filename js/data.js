@@ -1,7 +1,7 @@
 // 游戏的所有数值配置都在这里，调平衡只改这个文件
 
 // 存档版本号：以后改存档结构时 +1，并在 save.js 的 migrate() 里做兼容
-export const SAVE_V = 3; // v2：新增装备（bag / gear）；v3：新增剧情进度（story）
+export const SAVE_V = 4; // v2 装备；v3 剧情进度；v4 指挥官/天赋/武器强化/队友/剧情改为 15 关
 
 // 一局时长（秒）：坚持到这个时间就算胜利撤离
 export const BATTLE_TIME = 300;
@@ -30,10 +30,10 @@ export const ZOMBIES = {
 // 区域：hp = 丧尸血量倍率，reward = 物资倍率
 export const ZONES = [
   { name: '郊外小镇',   desc: '尸潮刚爆发的地方，适合练手',     hp: 1,   reward: 1,   ground: '#5d6b45', fog: 0x2a3024 },
-  { name: '废弃商场',   desc: '商场里挤满了逛不完街的丧尸',     hp: 1.8, reward: 1.6, ground: '#6e6a62', fog: 0x2c2a2a },
-  { name: '市立医院',   desc: '病人、医生……全都变了',           hp: 3,   reward: 2.4, ground: '#61707a', fog: 0x22292e },
-  { name: '军事基地',   desc: '穿着防弹衣的丧尸格外难缠',       hp: 5,   reward: 3.5, ground: '#6b6046', fog: 0x2e2a1f },
-  { name: '病毒研究所', desc: '一切的源头，最强的尸王在此',     hp: 8,   reward: 5,   ground: '#4f4a63', fog: 0x221f2b },
+  { name: '废弃商场',   desc: '商场里挤满了逛不完街的丧尸',     hp: 2.4, reward: 1.6, ground: '#6e6a62', fog: 0x2c2a2a },
+  { name: '市立医院',   desc: '病人、医生……全都变了',           hp: 4,   reward: 2.4, ground: '#61707a', fog: 0x22292e },
+  { name: '军事基地',   desc: '穿着防弹衣的丧尸格外难缠',       hp: 6.8, reward: 3.5, ground: '#6b6046', fog: 0x2e2a1f },
+  { name: '病毒研究所', desc: '一切的源头，最强的尸王在此',     hp: 10.5, reward: 5,   ground: '#4f4a63', fog: 0x221f2b },
 ];
 
 // 基地建筑：费用 = base × growth^当前等级
@@ -91,3 +91,37 @@ export const GEAR_STATS = {
   pickup: { name: '拾取范围', base: 0.12, zone: false, pct: true },
 };
 export const BAG_SIZE = 20;
+
+// ---------- 队友（剧情同伴，出征最多带 2 人，电脑操控） ----------
+// weapon：dmg 伤害 / rate 每秒发数 / range 射程 / count 每次发数 / spread 散布 / pierce 穿透
+// skill：heal 治疗 / grenade 手雷 / slow 减速力场 / tank 吸引火力（血厚）/ snipe 远程穿透
+export const SQUAD_MAX = 2;
+export const COMPANIONS = {
+  '陈医生': { role: '医疗兵', icon: '🩺', color: 0x7fd38a, hp: 120, weapon: { dmg: 7, rate: 1.6, range: 12, count: 1 }, skill: 'heal', desc: '每 10 秒为全队回复 12% 生命' },
+  '阿杰':   { role: '霰弹手', icon: '💥', color: 0xffc04a, hp: 220, weapon: { dmg: 7, rate: 1.0, range: 8, count: 4, spread: 0.5 }, skill: 'tank', desc: '血厚，丧尸更爱追着他咬' },
+  '小敏':   { role: '狙击手', icon: '🎯', color: 0xff8fb0, hp: 100, weapon: { dmg: 34, rate: 0.8, range: 20, count: 1, pierce: 2 }, skill: 'snipe', desc: '远距离穿透射击，专打大块头' },
+  '周队长': { role: '机枪手', icon: '🔥', color: 0xc9b38a, hp: 180, weapon: { dmg: 5, rate: 7, range: 14, count: 1, jitter: 0.2 }, skill: 'grenade', desc: '火力压制，每 12 秒扔一颗手雷' },
+  '林晓':   { role: '科学家', icon: '🧪', color: 0xb9a0ff, hp: 110, weapon: { dmg: 9, rate: 2, range: 13, count: 1 }, skill: 'slow', desc: '身边 5 米内的丧尸减速 40%' },
+};
+export const COMP_MAX_LV = 20;
+export const compNeed = lv => 60 + lv * 45;          // 队友升级所需经验
+export const compMul = lv => 1 + 0.12 * (lv - 1);    // 队友等级对伤害/生命的加成
+
+// ---------- 指挥官等级与天赋（每升 1 级得 1 点） ----------
+export const CMD_MAX_LV = 50;
+export const cmdNeed = lv => 120 + lv * 70;
+export const TALENTS = [
+  { key: 'hp',    icon: '❤️', name: '体魄', max: 10, desc: lv => `生命 +${lv * 6}%` },
+  { key: 'gun',   icon: '🎯', name: '枪法', max: 10, desc: lv => `伤害 +${lv * 5}%` },
+  { key: 'aid',   icon: '💊', name: '急救', max: 10, desc: lv => `每秒回血 +${(lv * 0.25).toFixed(2)}` },
+  { key: 'move',  icon: '👟', name: '迅捷', max: 10, desc: lv => `移速 +${lv * 2}%` },
+  { key: 'ammo',  icon: '📦', name: '补给', max: 10, desc: lv => `剧情关弹药 +${lv * 8}%` },
+  { key: 'loot',  icon: '🔩', name: '拾荒', max: 10, desc: lv => `物资 +${lv * 6}%` },
+  { key: 'lead',  icon: '🎖️', name: '统帅', max: 10, desc: lv => `队友伤害和生命 +${lv * 8}%` },
+];
+
+// ---------- 武器强化 ----------
+export const WEAPON_MAX_LV = 10;
+export const WEAPON_TIER = { pistol: 1, shotgun: 1.6, smg: 2.2, rifle: 3 };
+export const weaponUpCost = (key, lv) => Math.round(60 * WEAPON_TIER[key] * Math.pow(1.45, lv) / 5) * 5;
+export const weaponMul = lv => ({ dmg: 1 + 0.1 * lv, rate: 1 + 0.025 * lv });

@@ -72,8 +72,8 @@ assert.equal(mem.getItem(S.SAVE_KEY + '-backup'), '{坏掉的');
 // v1 老存档（没有装备字段）要能正常加载
 mem.setItem(S.SAVE_KEY, JSON.stringify({ v: 1, scrap: 50, buildings: { hq: 2, armory: 1 }, survivors: ['老王'] }));
 const v1 = S.load(mem);
-assert.equal(v1.v, 3);
-assert.deepEqual(v1.story, { done: 0 });
+assert.equal(v1.v, 4);
+assert.deepEqual(v1.story, { stage: 0 });
 assert.deepEqual(v1.bag, []);
 assert.deepEqual(v1.gear, { head: null, body: null, acc: null });
 assert.equal(v1.survivors[0], '老王');
@@ -117,6 +117,59 @@ console.log('区域1 品质（普通/精良/史诗/传说）:', dist(0));
 console.log('区域5 品质（普通/精良/史诗/传说）:', dist(4));
 const sample = S.makeItem(g, 4, 3);
 console.log('区域5 传说样例:', sample.name, JSON.stringify(sample.stats));
+
+// ---------- v4：剧情按关 / 指挥官 / 武器强化 / 队友 ----------
+// v3 老存档：通关 2 章 → 第 6 关；陈医生、阿杰已加入 → 自动成为可用队友
+mem.setItem(S.SAVE_KEY, JSON.stringify({ v: 3, scrap: 999, story: { done: 2 }, survivors: ['陈医生', '阿杰', '老王'], buildings: { hq: 4, armory: 3 } }));
+const v3 = S.load(mem);
+assert.equal(v3.story.stage, 6);
+assert.deepEqual(Object.keys(v3.comps).sort(), ['阿杰', '陈医生'].sort());
+assert.equal(v3.cmd.lv, 1);
+
+// 队友上阵：最多 2 人
+assert.ok(S.toggleSquad(v3, '陈医生').ok);
+assert.ok(S.toggleSquad(v3, '阿杰').ok);
+assert.equal(S.toggleSquad(v3, '老王').ok, false);
+assert.equal(S.battleStats(v3).squad.length, 2);
+
+// 天赋：没点数不能加；升级后能加，属性变强；重置返还
+assert.equal(S.learnTalent(v3, 'gun').ok, false);
+const ups = S.addCmdXp(v3, 5000);
+assert.ok(ups >= 3, '大量经验应升好几级');
+const dmg0 = S.battleStats(v3).dmgMul;
+assert.ok(S.learnTalent(v3, 'gun').ok);
+assert.ok(S.battleStats(v3).dmgMul > dmg0);
+const pts = v3.cmd.pts;
+v3.scrap = 99999;
+assert.ok(S.resetTalents(v3).ok);
+assert.equal(v3.cmd.pts, pts + 1);
+
+// 武器强化：受军械库等级限制（强化等级 ≤ 军械库 +2）
+v3.scrap = 99999;
+const d0 = S.battleStats(v3, 'pistol').dmgMul;
+for (let i = 0; i < 5; i++) S.weaponUp(v3, 'pistol');
+assert.equal(v3.weaponLv.pistol, 5); // 军械库 3 → 最多到 5
+assert.equal(S.weaponUp(v3, 'pistol').ok, false);
+assert.ok(S.battleStats(v3, 'pistol').dmgMul > d0 * 1.4);
+
+// 剧情按关结算：第 6 关（3-1）首通；队友得经验
+v3.scrap = 0;
+const sr = S.applyResult(v3, { win: true, zoneIndex: 2, time: 200, kills: 80, scrap: 50, rescued: 0, level: 5, story: 6, squad: ['陈医生', '阿杰'] });
+assert.equal(sr.storyFirst, true);
+assert.equal(v3.story.stage, 7);
+assert.equal(sr.chapterDone, false);
+assert.ok(v3.comps['陈医生'].lv > 1 || v3.comps['陈医生'].xp > 0);
+// 第 8 关（3-3）是本章最后一关：通关后小敏加入并成为队友
+v3.story.stage = 8;
+const sr2 = S.applyResult(v3, { win: true, zoneIndex: 2, time: 200, kills: 10, scrap: 0, rescued: 0, level: 1, story: 8, squad: [] });
+assert.equal(sr2.chapterDone, true);
+assert.equal(sr2.storyJoin, '小敏');
+assert.ok(v3.comps['小敏']);
+// 食物训练队友
+v3.food = 9999;
+const lv0 = v3.comps['小敏'].lv;
+for (let i = 0; i < 5; i++) S.trainComp(v3, '小敏');
+assert.ok(v3.comps['小敏'].lv > lv0);
 
 // 费用曲线打印，方便调平衡
 const line = k => [0, 1, 2, 4, 6, 9].map(lv => S.cost(k, lv)).join(' / ');
