@@ -104,9 +104,11 @@ function renderGo() {
   const zones = ZONES.map((z, i) => {
     const locked = i > game.cleared, cleared = i < game.cleared, best = game.stats.best[i];
     return `<div class="zone ${locked ? 'locked' : ''} ${i === game.zone ? 'sel' : ''}" data-zone="${i}">
-      <div class="zone-name">${locked ? '🔒' : cleared ? '✅' : '☠️'} ${i + 1}. ${z.name}</div>
-      <div class="zone-desc">${locked ? '先通关上一个区域' : z.desc}</div>
-      <div class="zone-meta">丧尸强度 ×${z.hp} · 奖励 ×${z.reward}${best ? ` · 最久坚持 ${mmss(best)}` : ''}</div></div>`;
+      <div class="zone-main">
+        <div class="zone-name">${locked ? '🔒' : cleared ? '✅' : '☠️'} ${i + 1}. ${z.name}</div>
+        <div class="zone-desc">${locked ? '先通关上一个区域' : z.desc}</div>
+        <div class="zone-meta">丧尸强度 ×${z.hp} · 奖励 ×${z.reward}${best ? ` · 最久坚持 ${mmss(best)}` : ''}</div>
+      </div>${locked ? '' : '<span class="zone-go">出发 ▶</span>'}</div>`;
   }).join('');
   const weaps = Object.entries(WEAPONS).map(([k, w]) => {
     const lock = !S.weaponUnlocked(game, k);
@@ -114,10 +116,9 @@ function renderGo() {
       <b>${w.icon} ${w.name}</b><small>${lock ? `军械库 Lv${w.armory} 解锁` : w.desc}</small></button>`;
   }).join('');
   $('tab-go').innerHTML = `
-    <div class="section-title">选择区域（坚持 ${BATTLE_TIME / 60} 分钟即可撤离）</div>${zones}
-    <div class="section-title">选择武器</div><div class="weapons">${weaps}</div>
+    <div class="section-title">① 选择武器</div><div class="weapons">${weaps}</div>
     <div class="stat-line">攻击 ×${st.dmgMul.toFixed(2)} · 生命 ${st.maxHp} · 回血 ${st.regen.toFixed(1)}/秒</div>
-    <button class="btn big" id="btnGo">⚔️ 出发！</button>`;
+    <div class="section-title">② 点区域直接出发（坚持 ${BATTLE_TIME / 60} 分钟即可撤离）</div>${zones}`;
 }
 
 function renderTab() {
@@ -179,7 +180,7 @@ $('tab-go').addEventListener('click', e => {
   if (z) {
     const i = +z.dataset.zone;
     if (i > game.cleared) { toast('先通关上一个区域'); return; }
-    game.zone = i; sfx.play('click'); save(); renderGo(); return;
+    game.zone = i; sfx.play('click'); startBattle(); return;
   }
   const w = e.target.closest('[data-weap]');
   if (w) {
@@ -187,7 +188,6 @@ $('tab-go').addEventListener('click', e => {
     if (!S.weaponUnlocked(game, k)) { toast(`需要军械库 Lv${WEAPONS[k].armory}`); return; }
     game.weapon = k; sfx.play('click'); save(); renderGo(); return;
   }
-  if (e.target.closest('#btnGo')) startBattle();
 });
 
 $('btnCollect').addEventListener('click', () => {

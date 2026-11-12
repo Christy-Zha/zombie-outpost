@@ -83,7 +83,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .chip { padding: 5px 10px; border-radius: 20px; background: rgba(139,195,74,.15); color: #cfe8b0; font-size: 13px; }
 .section-title { font-size: 13px; color: var(--muted); margin: 12px 2px 6px; }
 
-.zone { padding: 10px 12px; margin-bottom: 8px; border-radius: 14px; background: rgba(255,255,255,.04); border: 2px solid transparent; }
+.zone { display: flex; align-items: center; gap: 10px; padding: 10px 12px; margin-bottom: 8px; border-radius: 14px; background: rgba(255,255,255,.04); border: 2px solid transparent; cursor: pointer; }
+.zone-main { flex: 1; min-width: 0; }
+.zone-go { flex: none; padding: 10px 12px; border-radius: 12px; background: var(--accent); color: #2a1a06; font-weight: 800; font-size: 15px; }
 .zone.sel { border-color: var(--accent); background: rgba(242,163,58,.1); }
 .zone.locked { opacity: .45; }
 .zone-name { font-weight: 800; font-size: 16px; }

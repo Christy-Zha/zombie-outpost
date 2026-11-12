@@ -57,7 +57,7 @@ await sleep(300);
 await shot('03-go-tab');
 
 // 开始战斗，按住 D 向右走
-await ev(`document.getElementById('btnGo').click(); true`);
+await ev(`document.querySelector('[data-zone="0"]').click(); true`);
 await sleep(500);
 await key('KeyD', 'keyDown');
 await sleep(4000);
