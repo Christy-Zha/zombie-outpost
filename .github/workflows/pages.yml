@@ -1,0 +1,49 @@
+# 自动发布到 GitHub Pages：游戏代码（本仓库，公开）+ 人物模型（私有仓库 zombie-outpost-models）
+# 模型不在公开仓库里（Mixamo 授权不允许单独分发），只在发布网站时合并进去
+name: 发布网站
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: 取游戏代码
+        uses: actions/checkout@v4
+
+      - name: 取人物模型（私有仓库，只读钥匙）
+        uses: actions/checkout@v4
+        with:
+          repository: Christy-Zha/zombie-outpost-models
+          ssh-key: ${{ secrets.MODELS_DEPLOY_KEY }}
+          path: _models
+
+      - name: 组装网站文件（不含开发工具）
+        run: |
+          mkdir _site
+          cp -r index.html style.css manifest.webmanifest sw.js js vendor assets icons _site/
+          mkdir -p _site/models
+          cp _models/*.glb _site/models/
+          ls -la _site _site/models
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4

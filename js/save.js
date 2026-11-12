@@ -1,7 +1,9 @@
 // 存档与经济系统（纯逻辑，不依赖画面，可以单独用 node 测试）
 import { BUILDINGS, WEAPONS, ZONES, SAVE_V, SURVIVOR_NAMES, STORE_HOURS, GEAR_SLOTS, RARITIES, GEAR_STATS, BAG_SIZE,
-  COMPANIONS, SQUAD_MAX, COMP_MAX_LV, compNeed, compMul, CMD_MAX_LV, cmdNeed, TALENTS, WEAPON_MAX_LV, weaponUpCost, weaponMul } from './data.js';
-import { CHAPTERS } from './story.js';
+  COMPANIONS, SQUAD_MAX, COMP_MAX_LV, compNeed, compMul, CMD_MAX_LV, cmdNeed, TALENTS, WEAPON_MAX_LV, weaponUpCost, weaponMul,
+  PERKS, BOND_PER_CHAT, BOND_PER_RUN, RAID_EVERY } from './data.js';
+import { SIDE } from './side.js';
+import { CHAPTERS, ENDINGS } from './story.js';
 
 export const SAVE_KEY = 'zombie-outpost-save';
 const B = Object.fromEntries(BUILDINGS.map(b => [b.key, b]));
@@ -26,11 +28,16 @@ export function defaultSave(now = Date.now()) {
     bag: [],                                  // 背包里的装备
     gear: { head: null, body: null, acc: null }, // 已穿戴装备的 id
     nextItemId: 1,
-    story: { stage: 0 },  // 已通关的剧情关卡数（0~15，每章 3 关）
+    story: { stage: 0, flags: {}, ending: null, endings: [] }, // 已通关关卡数 / 剧情选择标记 / 达成的结局
     cmd: { lv: 1, xp: 0, pts: 0, talents: {} }, // 指挥官等级 / 天赋
     weaponLv: { pistol: 0, shotgun: 0, smg: 0, rifle: 0 }, // 武器强化等级
     comps: {},            // 队友成长：名字 → { lv, xp }
     squad: [],            // 出征带的队友（最多 2 人）
+    bond: {},             // 好感度：名字 → 0~100
+    chat: {},             // 闲聊进度：名字 → { i: 已聊到第几组, run: 上次聊天时的出征次数 }
+    sideDone: [],         // 已完成的支线：'陈医生:0'
+    perks: {},            // 已解锁的队友专属技能
+    raid: { next: RAID_EVERY, wins: 0 }, // 出征次数达到 next 时，据点遭遇夜袭
   };
 }
 
@@ -53,7 +60,7 @@ export function migrate(d, now = Date.now()) {
   // v2 → v3 → v4：剧情进度从“章”改成“关”（每章 3 关）
   const st = d.story || {};
   const total = CHAPTERS.reduce((n, c) => n + c.stages.length, 0);
-  s.story = { stage: typeof st.stage === 'number' ? st.stage : (st.done | 0) * 3 };
+  s.story = { stage: typeof st.stage === 'number' ? st.stage : (st.done | 0) * 3, flags: { ...(st.flags || {}) }, ending: st.ending || null, endings: Array.isArray(st.endings) ? st.endings : [] };
   s.story.stage = Math.max(0, Math.min(total, s.story.stage | 0));
   // v4：指挥官 / 武器强化 / 队友
   s.cmd = { ...def.cmd, ...(d.cmd || {}) };
@@ -62,6 +69,13 @@ export function migrate(d, now = Date.now()) {
   s.comps = { ...(d.comps || {}) };
   for (const n of Object.keys(COMPANIONS)) if (s.survivors.includes(n) && !s.comps[n]) s.comps[n] = { lv: 1, xp: 0 };
   s.squad = (Array.isArray(d.squad) ? d.squad : []).filter(n => s.comps[n]).slice(0, SQUAD_MAX);
+  // v5：好感 / 支线 / 专属技能 / 夜袭
+  s.bond = { ...(d.bond || {}) };
+  s.chat = { ...(d.chat || {}) };
+  s.sideDone = Array.isArray(d.sideDone) ? d.sideDone : [];
+  s.perks = { ...(d.perks || {}) };
+  s.raid = { ...def.raid, ...(d.raid || {}) };
+  if (!d.raid) s.raid.next = (s.stats.runs | 0) + RAID_EVERY;
   if (!WEAPONS[s.weapon]) s.weapon = 'pistol';
   if (typeof s.lastTick !== 'number') s.lastTick = now;
   s.cleared = Math.max(0, Math.min(ZONES.length, s.cleared | 0));
@@ -179,7 +193,8 @@ export function battleStats(s, weaponKey = s.weapon) {
     speedMul: (1 + g.speed) * (1 + 0.02 * t.move),
     ammoMul: 1 + 0.08 * t.ammo,
     lootMul: 1 + 0.06 * t.loot,
-    squad: s.squad.filter(nm => s.comps[nm]).map(nm => ({ name: nm, lv: s.comps[nm].lv, mul: compMul(s.comps[nm].lv) * (1 + 0.08 * t.lead) })),
+    squad: s.squad.filter(nm => s.comps[nm]).map(nm => ({ name: nm, lv: s.comps[nm].lv, mul: compMul(s.comps[nm].lv) * (1 + 0.08 * t.lead), perks: Object.keys(s.perks).filter(k => s.perks[k] && PERKS[k] && PERKS[k].who === nm) })),
+    turret: s.buildings.turret | 0,
   };
 }
 
@@ -263,6 +278,47 @@ export function trainComp(s, name) {
   s.food -= cost;
   const ups = addCompXp(s, name, 40 + c.lv * 8);
   return { ok: true, ups, lv: c.lv };
+}
+
+// ---------- 好感度 / 闲聊 / 支线 ----------
+export const bondOf = (s, nm) => s.bond[nm] | 0;
+// 每出征一次可以和每位队友聊一次
+export function chatAvailable(s, nm) {
+  const c = s.chat[nm] || { i: 0, run: -1 };
+  return !!SIDE[nm] && !!s.comps[nm] && c.run < s.stats.runs;
+}
+export function doChat(s, nm) {
+  if (!chatAvailable(s, nm)) return null;
+  const c = s.chat[nm] || { i: 0, run: -1 };
+  const chats = SIDE[nm].chats;
+  const lines = chats[Math.min(c.i, chats.length - 1)];
+  s.chat[nm] = { i: Math.min(c.i + 1, chats.length), run: s.stats.runs };
+  s.bond[nm] = Math.min(100, bondOf(s, nm) + (c.i < chats.length ? BOND_PER_CHAT : 3));
+  return lines;
+}
+export const sideKey = (nm, k) => `${nm}:${k}`;
+export function sideState(s, nm, k) {
+  const st = SIDE[nm] && SIDE[nm].stages[k];
+  if (!st || !s.comps[nm]) return { locked: true, reason: '还没有这个队友' };
+  if (s.sideDone.includes(sideKey(nm, k))) return { done: true, st };
+  if (k > 0 && !s.sideDone.includes(sideKey(nm, k - 1))) return { locked: true, reason: '先完成支线一', st };
+  if (bondOf(s, nm) < st.bond) return { locked: true, reason: `好感度需要 ${st.bond}`, st };
+  return { open: true, st };
+}
+
+// ---------- 夜袭 ----------
+export const raidDue = s => s.stats.runs >= s.raid.next;
+export function raidPower(s) { return 1 + 0.35 * s.raid.wins; } // 每守住一次，下次更凶
+
+// ---------- 结局 ----------
+export function pickEnding(s) {
+  const f = s.story.flags;
+  return ENDINGS.find(e => (e.need || []).every(k => f[k])) || ENDINGS[ENDINGS.length - 1];
+}
+export function setFlags(s, set = {}, gain = {}) {
+  Object.assign(s.story.flags, set);
+  if (gain.scrap) s.scrap += gain.scrap;
+  if (gain.food) s.food += gain.food;
 }
 
 // ---------- 剧情关卡 ----------
@@ -353,10 +409,21 @@ export const weaponUnlocked = (s, key) => s.buildings.armory >= WEAPONS[key].arm
 export function applyResult(s, r) {
   const zone = ZONES[r.zoneIndex];
   let bonus = 0, firstClear = false;
-  const isStory = r.story !== null && r.story !== undefined;
+  const isStory = r.story !== null && r.story !== undefined && !r.side && !r.raid;
   let storyFirst = false, storyJoin = null;
-  let chapterDone = false;
-  if (isStory && r.win) {
+  let chapterDone = false, perk = null, raidLoss = null;
+  const isSide = !!r.side, isRaid = !!r.raid;
+  if (isSide && r.win) {
+    const st = SIDE[r.side.name].stages[r.side.k], key = sideKey(r.side.name, r.side.k);
+    storyFirst = !s.sideDone.includes(key);
+    bonus = storyFirst ? st.reward.scrap : Math.round(st.reward.scrap * 0.25);
+    if (storyFirst) { s.sideDone.push(key); if (st.perk) { s.perks[st.perk] = true; perk = st.perk; } s.bond[r.side.name] = Math.min(100, bondOf(s, r.side.name) + 10); }
+  } else if (isRaid) {
+    // 夜袭：守住给大量资源；失败损失仓库和一部分物资
+    if (r.win) { bonus = Math.round(180 * raidPower(s) * (1 + s.buildings.hq * 0.3)); s.food += Math.round(bonus * 0.4); s.raid.wins++; }
+    else { raidLoss = { scrap: Math.floor(s.scrap * 0.15 + s.store.scrap), food: Math.floor(s.store.food) }; s.scrap -= Math.floor(s.scrap * 0.15); s.store.scrap = 0; s.store.food = 0; }
+    s.raid.next = s.stats.runs + 1 + RAID_EVERY;
+  } else if (isStory && r.win) {
     // 剧情关卡：首次通关给全额奖励，重玩给 25%；每章最后一关通关后同伴加入
     const { ch, si } = stageAt(r.story);
     const full = Math.round(ch.reward.scrap * (STAGE_SHARE[si] || 0.35));
@@ -407,9 +474,16 @@ export function applyResult(s, r) {
   const cmdXp = r.kills * 1 + (r.win ? 60 + 40 * (isStory ? 2 : r.zoneIndex) : 20) + (storyFirst ? 120 : 0);
   const cmdUps = addCmdXp(s, cmdXp);
   const compUps = {};
-  for (const nm of r.squad || []) compUps[nm] = addCompXp(s, nm, 20 + r.kills * 0.6 + (r.win ? 40 : 0));
+  for (const nm of r.squad || []) { compUps[nm] = addCompXp(s, nm, 20 + r.kills * 0.6 + (r.win ? 40 : 0)); s.bond[nm] = Math.min(100, bondOf(s, nm) + BOND_PER_RUN); }
   s.stats.runs++;
   s.stats.kills += r.kills;
-  s.stats.best[r.zoneIndex] = Math.max(s.stats.best[r.zoneIndex] || 0, Math.floor(r.time));
-  return { bonus, firstClear, joined, extraFood, item, itemScrap, storyFirst, storyJoin, chapterDone, lootBonus, cmdXp, cmdUps, compUps };
+  if (!isStory && !isSide && !isRaid) s.stats.best[r.zoneIndex] = Math.max(s.stats.best[r.zoneIndex] || 0, Math.floor(r.time));
+  // 主线最后一关通关：记录结局
+  let ending = null;
+  if (isStory && r.win && storyFirst && s.story.stage >= CHAPTERS.reduce((n, c) => n + c.stages.length, 0)) {
+    ending = pickEnding(s);
+    s.story.ending = ending.key;
+    if (!s.story.endings.includes(ending.key)) s.story.endings.push(ending.key);
+  }
+  return { bonus, firstClear, joined, extraFood, item, itemScrap, storyFirst, storyJoin, chapterDone, lootBonus, cmdXp, cmdUps, compUps, perk, raidLoss, ending };
 }

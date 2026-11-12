@@ -22,6 +22,13 @@ const PLAN = {
   player: { anims: ['idle', 'run', 'shoot', 'death'], tex: 1024, tris: 15000 },
   zombie: { anims: ['walk', 'run', 'attack', 'death'], tex: 512, tris: 6000 },
   mutant: { anims: ['walk', 'run', 'attack', 'death'], tex: 1024, tris: 10000 },
+  // 队友 / 新丧尸：只有模型本体 + 1 个动作，其余动作在游戏里共用 player / zombie 的
+  c_chen: { anims: ['idle'], tex: 512, tris: 6000 }, c_min: { anims: ['idle'], tex: 512, tris: 6000 },
+  c_jie: { anims: ['idle'], tex: 512, tris: 6000 }, c_zhou: { anims: ['idle'], tex: 512, tris: 6000 },
+  c_xiao: { anims: ['idle'], tex: 512, tris: 6000 },
+  z_exploder: { anims: ['walk'], tex: 512, tris: 5000 }, z_spitter: { anims: ['walk'], tex: 512, tris: 5000 },
+  z_screamer: { anims: ['walk'], tex: 512, tris: 5000 }, z_armored: { anims: ['walk'], tex: 512, tris: 5000 },
+  z_runner: { anims: ['walk'], tex: 512, tris: 5000 }, z_walker2: { anims: ['walk'], tex: 512, tris: 5000 },
 };
 
 const CHROME = [
@@ -35,7 +42,7 @@ if (!CHROME) { console.error('找不到 Chrome 或 Edge 浏览器'); process.exi
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.fbx': 'application/octet-stream', '.png': 'image/png', '.jpg': 'image/jpeg' };
 const server = http.createServer((req, res) => {
   const p = path.join(ROOT, decodeURIComponent(new URL(req.url, 'http://x').pathname));
-  if (!p.startsWith(ROOT) || !fs.existsSync(p) || fs.statSync(p).isDirectory()) { res.writeHead(404); res.end(); return; }
+  if (!p.startsWith(ROOT) || !fs.existsSync(p) || fs.statSync(p).isDirectory()) { if (process.env.DEBUG) console.log('   [404]', path.relative(ROOT, p)); res.writeHead(404); res.end(); return; }
   res.writeHead(200, { 'Content-Type': MIME[path.extname(p).toLowerCase()] || 'application/octet-stream' });
   fs.createReadStream(p).pipe(res);
 });
@@ -61,6 +68,7 @@ const logs = [];
 ws.addEventListener('message', ev => {
   const m = JSON.parse(ev.data);
   if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); }
+  if (process.env.DEBUG && m.method === 'Runtime.consoleAPICalled' && m.params.type !== 'log') console.log('   [浏览器]', m.params.args.map(a => a.value ?? a.description).join(' ').slice(0, 200));
   if (m.method === 'Runtime.exceptionThrown') logs.push(m.params.exceptionDetails.exception?.description || m.params.exceptionDetails.text);
 });
 const send = (method, params = {}) => new Promise(r => { const i = ++id; pending.set(i, r); ws.send(JSON.stringify({ id: i, method, params })); });
@@ -101,6 +109,7 @@ for (const name of dirs) {
     done++;
     console.log(`完成\n   → ${path.relative(ROOT, out)}  ${(buf.length / 1048576).toFixed(2)} MB，${r.trisBefore > r.tris ? `三角面 ${r.trisBefore} → ${r.tris}` : `${r.tris} 个三角面`}，身高 ${r.height.toFixed(1)}`);
     console.log(`   动作：${r.anims.join('、')}`);
+    if (r.bad && r.bad.length) console.log('   ⚠️ 贴图解码失败：', r.bad.join(' | '));
     if (missing.length) console.log(`   ⚠️ 缺少动作：${missing.join('、')}（文件名要叫 ${missing.map(m => m + '.fbx').join(' / ')}）`);
     if (r.tris > plan.tris * 1.3) console.log('   ⚠️ 减面没减到目标（模型结构复杂），手机上同屏数量要少一些');
   } catch (e) {

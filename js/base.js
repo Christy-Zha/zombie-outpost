@@ -1,7 +1,7 @@
 // 据点 3D 场景（写实版）：水泥路障围墙、瞭望塔、8 块建筑地块、黄昏光影、闲逛的幸存者、墙外游荡的丧尸
 // 贴图和道具来自 Poly Haven（CC0），见 js/env.js；人物用 Mixamo 模型（有的话）
 import * as THREE from '../vendor/three.module.min.js';
-import { BUILDINGS } from './data.js';
+import { BUILDINGS, COMPANIONS } from './data.js';
 import { zombieGeometry, personGroup, rand, seeded } from './util.js';
 import { pbr, prop, propInstances } from './env.js';
 import { hasModel, Rig } from './models.js';
@@ -44,6 +44,7 @@ const PLOTS = {
   dorm: [-6, -3.4], hq: [-2, -3.4], armory: [2, -3.4], radio: [6, -3.4],
   clinic: [-6, 3.4], gym: [-2, 3.4], farm: [2, 3.4], scrapyard: [6, 3.4],
 };
+export const TOWERS = [[-9.4, -6.8], [9.4, -6.8], [-9.4, 6.8], [9.4, 6.8]]; // 四角瞭望塔
 const TINTS = [0xc06050, 0x5080b0, 0x60a060, 0x9070b0, 0xc08040, 0x50a0a0, 0x909090, 0xc0b050];
 
 // ---------- 小工具：带贴图的方块 ----------
@@ -251,6 +252,7 @@ export class BaseView {
 
     const padMat = mat('concrete_floor_01', [1.2, 1.2], 0xb8b4aa);
     for (const b of BUILDINGS) {
+      if (!PLOTS[b.key]) continue;
       const [x, z] = PLOTS[b.key];
       const pad = new THREE.Mesh(new THREE.BoxGeometry(3.5, 0.08, 3.5), padMat);
       pad.position.set(x, 0.04, z);
@@ -294,7 +296,7 @@ export class BaseView {
     s.add(propInstances('concrete_road_barrier', list, { lambert: false, shadow: true }));
     // 四角瞭望塔：木头支架 + 铁皮顶
     const wood = mat('brown_planks_05', [0.3, 2]), plank = mat('brown_planks_05', [1, 1]), iron = mat('corrugated_iron', [1, 1]);
-    for (const [x, z] of [[-9.4, -6.8], [9.4, -6.8], [-9.4, 6.8], [9.4, 6.8]]) {
+    for (const [x, z] of TOWERS) {
       const g = new THREE.Group();
       for (const [dx, dz] of [[-0.45, -0.45], [0.45, -0.45], [-0.45, 0.45], [0.45, 0.45]]) block(g, 0.12, 2.6, 0.12, wood, dx, 0, dz);
       block(g, 1.2, 0.1, 1.2, plank, 0, 1.9);
@@ -356,8 +358,9 @@ export class BaseView {
   refresh(save) {
     this.shadowDirty = true;
     for (const b of BUILDINGS) {
-      const lv = save.buildings[b.key];
+      const lv = save.buildings[b.key] || 0;
       if (this.levels[b.key] === lv) continue;
+      if (b.key === 'turret') { this.levels.turret = lv; this.setTurrets(lv); continue; }
       const upgraded = this.levels[b.key] !== undefined;
       this.levels[b.key] = lv;
       const old = this.groups[b.key];
@@ -383,7 +386,11 @@ export class BaseView {
     while (this.survivors.length < want) {
       const i = this.survivors.length;
       let obj, rig = null;
-      if (hasModel('player')) { rig = new Rig('player', 1.6); rig.tint(TINTS[i % TINTS.length]); rig.play('idle', { fade: 0 }); rig.mixer.update(Math.random() * 5); obj = rig.group; }
+      // 队友用自己的模型；普通幸存者轮流用几个真实人物模型
+      const nm = save.survivors[i], own = COMPANIONS[nm] && hasModel(COMPANIONS[nm].model) ? COMPANIONS[nm].model : null;
+      const people = ['c_chen', 'c_jie', 'c_min', 'c_zhou', 'c_xiao'].filter(hasModel);
+      const model = own || (people.length ? people[i % people.length] : hasModel('player') ? 'player' : null);
+      if (model) { rig = new Rig(model, 1.65); if (!own && model === 'player') rig.tint(TINTS[i % TINTS.length]); rig.play('idle', { fade: 0 }); rig.mixer.update(Math.random() * 5); obj = rig.group; }
       else { obj = personGroup({ shirt: TINTS[i % TINTS.length], gun: false }); obj.scale.setScalar(0.6); }
       obj.position.set(rand(-2, 2), 0.03, rand(-0.6, 0.6));
       obj.traverse(o => { if (o.isMesh) o.castShadow = false; }); // 会动的人物不投影（静态阴影只算一次）
@@ -393,7 +400,33 @@ export class BaseView {
     while (this.survivors.length > want) { const sv = this.survivors.pop(); this.scene.remove(sv.obj); if (sv.rig) sv.rig.dispose(); }
   }
 
+  // 瞭望塔上的炮塔（等级 ≥1 才出现，等级越高枪管越长）
+  setTurrets(lv) {
+    if (this.turrets) { this.scene.remove(this.turrets); this.turrets = null; }
+    if (lv <= 0) return;
+    const g = new THREE.Group();
+    const metal = plain(0x3a3e42, 0.5, 0.7);
+    for (const [x, z] of TOWERS) {
+      const t = new THREE.Group();
+      block(t, 0.5, 0.3, 0.5, metal, 0, 0, 0);
+      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.6 + lv * 0.05, 8).rotateX(Math.PI / 2), metal);
+      barrel.position.set(0, 0.2, 0.4); t.add(barrel);
+      t.position.set(x, 2.08, z);
+      t.lookAt(0, 2.08, 0);
+      g.add(t);
+    }
+    this.turrets = g;
+    this.scene.add(g);
+  }
+
+  // 模型加载完后重建幸存者（换成真实人物）
+  resetSurvivors() {
+    for (const sv of this.survivors) { this.scene.remove(sv.obj); if (sv.rig) sv.rig.dispose(); }
+    this.survivors = [];
+  }
+
   select(key) {
+    if (!PLOTS[key]) return;
     this.sel = key;
     const [x, z] = PLOTS[key];
     this.ring.position.set(x, 0.1, z);
@@ -477,4 +510,27 @@ export class BaseView {
       if (z.rig) z.rig.update(dt); else z.obj.rotation.z = Math.sin(z.ph) * 0.1;
     }
   }
+}
+
+// 夜袭守城战用：把据点（围墙、瞭望塔、建筑、篝火、炮塔）搭成一个 Group 给战斗场景用
+export { PLOTS };
+export function buildCompound(save) {
+  const g = new THREE.Group();
+  const fake = { scene: g };
+  BaseView.prototype.buildWalls.call(fake);
+  BaseView.prototype.buildCampfire.call(fake);
+  BaseView.prototype.buildClutter.call(fake);
+  for (const b of BUILDINGS) {
+    if (!PLOTS[b.key]) continue;
+    const lv = save.buildings[b.key] || 0;
+    const raw = new THREE.Group();
+    if (lv <= 0) buildSite(raw); else BUILDERS[b.key](raw, lv);
+    const baked = bake(raw);
+    const [x, z] = PLOTS[b.key];
+    baked.position.set(x, 0.08, z);
+    baked.scale.setScalar(0.9 + 0.015 * lv);
+    g.add(baked);
+  }
+  BaseView.prototype.setTurrets.call(fake, save.buildings.turret || 0);
+  return { group: g, flame: fake.flame, light: fake.light };
 }

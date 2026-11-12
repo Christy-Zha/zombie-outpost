@@ -72,8 +72,9 @@ assert.equal(mem.getItem(S.SAVE_KEY + '-backup'), '{坏掉的');
 // v1 老存档（没有装备字段）要能正常加载
 mem.setItem(S.SAVE_KEY, JSON.stringify({ v: 1, scrap: 50, buildings: { hq: 2, armory: 1 }, survivors: ['老王'] }));
 const v1 = S.load(mem);
-assert.equal(v1.v, 4);
-assert.deepEqual(v1.story, { stage: 0 });
+assert.equal(v1.v, 5);
+assert.equal(v1.story.stage, 0);
+assert.deepEqual(v1.story.flags, {});
 assert.deepEqual(v1.bag, []);
 assert.deepEqual(v1.gear, { head: null, body: null, acc: null });
 assert.equal(v1.survivors[0], '老王');
@@ -170,6 +171,50 @@ v3.food = 9999;
 const lv0 = v3.comps['小敏'].lv;
 for (let i = 0; i < 5; i++) S.trainComp(v3, '小敏');
 assert.ok(v3.comps['小敏'].lv > lv0);
+
+// ---------- v5：好感 / 闲聊 / 支线 / 专属技能 / 夜袭 / 结局 ----------
+{
+  const g = S.defaultSave(t0);
+  g.comps['陈医生'] = { lv: 1, xp: 0 }; g.survivors.push('陈医生');
+  // 闲聊：每出征一次只能聊一次，好感 +15
+  assert.ok(S.chatAvailable(g, '陈医生'));
+  const lines = S.doChat(g, '陈医生');
+  assert.ok(Array.isArray(lines) && lines.length > 0);
+  assert.equal(S.bondOf(g, '陈医生'), 15);
+  assert.equal(S.chatAvailable(g, '陈医生'), false);
+  g.stats.runs++;
+  assert.ok(S.chatAvailable(g, '陈医生'));
+  // 支线一：好感不够锁住；够了开放；通关得专属技能
+  assert.equal(S.sideState(g, '陈医生', 0).locked, true);
+  g.bond['陈医生'] = 30;
+  assert.equal(S.sideState(g, '陈医生', 0).open, true);
+  assert.equal(S.sideState(g, '陈医生', 1).locked, true);
+  const perk = S.sideState(g, '陈医生', 0).st.perk;
+  const sr = S.applyResult(g, { win: true, zoneIndex: 0, time: 100, kills: 30, scrap: 0, rescued: 0, level: 1, story: 'x', side: { name: '陈医生', k: 0 }, squad: [] });
+  assert.equal(sr.perk, perk);
+  assert.ok(g.perks[perk]);
+  g.squad = ['陈医生'];
+  assert.deepEqual(S.battleStats(g).squad[0].perks, [perk]);
+  assert.equal(g.story.stage, 0, '支线不推进主线');
+  // 夜袭：出征次数到了就来；守住加物资和食物；失败扣仓库
+  g.stats.runs = g.raid.next;
+  assert.ok(S.raidDue(g));
+  const sc0 = g.scrap;
+  S.applyResult(g, { win: true, zoneIndex: 0, time: 100, kills: 50, scrap: 0, rescued: 0, level: 1, raid: true, squad: [] });
+  assert.ok(g.scrap > sc0);
+  assert.equal(S.raidDue(g), false);
+  g.store.scrap = 100; g.scrap = 1000;
+  const lr = S.applyResult(g, { win: false, zoneIndex: 0, time: 100, kills: 50, scrap: 0, rescued: 0, level: 1, raid: true, squad: [] });
+  assert.ok(lr.raidLoss.scrap >= 100);
+  assert.equal(g.store.scrap, 0);
+  // 结局：标记不同 → 结局不同；默认结局总能命中
+  const { ENDINGS } = await import('../js/story.js');
+  g.story.flags = {};
+  assert.equal(S.pickEnding(g).key, ENDINGS[ENDINGS.length - 1].key);
+  for (const f of ENDINGS[0].need) g.story.flags[f] = true;
+  assert.equal(S.pickEnding(g).key, ENDINGS[0].key);
+  console.log('结局：', ENDINGS.map(e => `${e.title}（需要 ${e.need.join('+') || '无'}）`).join(' / '));
+}
 
 // 费用曲线打印，方便调平衡
 const line = k => [0, 1, 2, 4, 6, 9].map(lv => S.cost(k, lv)).join(' / ');

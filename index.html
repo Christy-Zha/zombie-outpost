@@ -38,6 +38,7 @@
       <button data-tab="gear">🎒 装备</button>
       <button data-tab="go">⚔️ 出征</button>
     </div>
+    <div class="raid-bar hidden" id="raidBar"><div id="raidText"></div><button class="btn small" id="btnRaid">🛡️ 迎战</button></div>
     <div class="store-bar">
       <div id="storeInfo"></div>
       <button id="btnCollect" class="btn small">收取</button>
@@ -69,6 +70,7 @@
   <div id="hSquad" class="hud-squad"></div>
   <div id="hRadio" class="hud-radio"></div>
   <div id="bossBar" class="bar boss hidden"><i id="bossFill"></i><span>☠️ 尸王</span></div>
+  <div id="coreBar" class="bar core hidden"><i id="coreFill"></i><span>🏛️ 指挥部</span></div>
   <div id="hMsg" class="hud-msg"></div>
   <div id="joy" class="joy hidden"><div id="joyKnob"></div></div>
   <div id="joyAim" class="joy aim hidden"><div id="joyAimKnob"></div></div>
@@ -83,6 +85,7 @@
   <div class="dlg-box">
     <div id="dlgName" class="dlg-name"></div>
     <div id="dlgText" class="dlg-text"></div>
+    <div id="dlgChoices" class="dlg-choices"></div>
     <div class="dlg-hint">点击继续 ▼</div>
   </div>
 </div>

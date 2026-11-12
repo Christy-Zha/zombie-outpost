@@ -220,3 +220,20 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .sq-hud.down span { color: #ffb3a0; }
 .hud-radio { position: absolute; left: 12px; right: 12px; bottom: calc(var(--bottom) + 200px); padding: 10px 14px; border-radius: 12px; background: rgba(0,0,0,.72); border-left: 3px solid #5dff8a; font-size: 14px; line-height: 1.5; pointer-events: none; opacity: 0; transform: translateY(8px); transition: opacity .3s, transform .3s; }
 .hud-radio.show { opacity: 1; transform: none; }
+
+/* ---------- 选择 / 好感 / 夜袭 ---------- */
+.dlg-choices { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.dlg-choices:empty { display: none; }
+.dlg-choices:not(:empty) + .dlg-hint { display: none; }
+.dlg-opt { padding: 12px 14px; border-radius: 12px; border: 2px solid rgba(242,163,58,.6); background: rgba(242,163,58,.12); color: #ffe0b0; font-size: 16px; font-weight: 800; text-align: left; }
+.bond { margin: -4px 0 10px; padding: 8px 10px; border-radius: 0 0 14px 14px; background: rgba(255,120,160,.06); border: 1px solid var(--line); border-top: none; }
+.bond-top { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; }
+.bond-top .mini-bar { flex: 1; margin: 0; }
+.mini-bar.pink i { background: linear-gradient(90deg, #ff6b9a, #ffb3c7); }
+.bio { font-size: 12px; margin: 6px 0; line-height: 1.5; }
+.raid-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: linear-gradient(90deg, rgba(200,40,30,.35), rgba(200,40,30,.1)); border-bottom: 1px solid rgba(255,80,60,.4); font-size: 13px; line-height: 1.4; animation: raidPulse 2s infinite; }
+.raid-bar > div { flex: 1; }
+@keyframes raidPulse { 50% { background: linear-gradient(90deg, rgba(200,40,30,.55), rgba(200,40,30,.15)); } }
+.bar.core { position: absolute; top: calc(var(--top) + 140px); left: 15%; right: 15%; height: 16px; pointer-events: none; }
+.bar.core i { background: linear-gradient(90deg, #2e7d32, #8bc34a); }
+.bar.core span { line-height: 14px; }

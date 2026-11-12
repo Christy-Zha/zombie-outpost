@@ -1,13 +1,14 @@
 // 主程序：界面切换、按钮事件、摇杆输入、游戏循环
 import * as THREE from '../vendor/three.module.min.js';
-import { BUILDINGS, WEAPONS, ZONES, BATTLE_TIME, GEAR_SLOTS, RARITIES, BAG_SIZE, COMPANIONS, SQUAD_MAX, COMP_MAX_LV, compNeed, compMul, CMD_MAX_LV, cmdNeed, TALENTS, WEAPON_MAX_LV, weaponUpCost } from './data.js';
+import { BUILDINGS, WEAPONS, ZONES, BATTLE_TIME, GEAR_SLOTS, RARITIES, BAG_SIZE, COMPANIONS, SQUAD_MAX, COMP_MAX_LV, compNeed, compMul, CMD_MAX_LV, cmdNeed, TALENTS, WEAPON_MAX_LV, weaponUpCost, PERKS, ZOMBIE_MODEL } from './data.js';
 import * as S from './save.js';
 import { Battle } from './battle.js';
 import { BaseView, BASE_TEXTURES } from './base.js';
 import { loadEnv } from './env.js';
 import { sfx } from './sfx.js';
-import { CHAPTERS, CAST } from './story.js';
-import { loadModels } from './models.js';
+import { CHAPTERS, CAST, ENDINGS } from './story.js';
+import { SIDE } from './side.js';
+import { loadModels, ensureModels, EXTRA, hasModel } from './models.js';
 
 const $ = id => document.getElementById(id);
 const fmt = n => { n = Math.floor(n); return n >= 100000 ? (n / 1000).toFixed(0) + 'k' : n >= 10000 ? (n / 1000).toFixed(1) + 'k' : String(n); };
@@ -33,6 +34,7 @@ sfx.setEnabled(game.sound);
 const baseView = new BaseView();
 baseView.refresh(game);
 let battle = null, mode = 'base', tab = 'build';
+ensureModels(EXTRA.filter(n => n.startsWith('c_'))).then(() => { baseView.resetSurvivors(); baseView.refresh(game); });
 
 // ---------- 小工具 ----------
 let toastTimer = 0;
@@ -121,7 +123,16 @@ function renderPeople() {
       <div class="comp-btns">
         <button class="btn small ${inSquad ? '' : 'ghost'}" data-squad="${nm}">${inSquad ? '✓ 出战' : '出战'}</button>
         <button class="btn small ghost" data-train="${nm}">训练<br><small>🌽${S.trainCost(game)}</small></button>
-      </div></div>`;
+      </div></div>
+      ${SIDE[nm] ? `<div class="bond">
+        <div class="bond-top">❤️ 好感 ${S.bondOf(game, nm)}/100 <div class="mini-bar pink"><i style="width:${S.bondOf(game, nm)}%"></i></div>
+          <button class="btn small ${S.chatAvailable(game, nm) ? '' : 'ghost'}" data-chat="${nm}">💬 聊天</button></div>
+        <div class="muted bio">${SIDE[nm].bio}</div>
+        ${SIDE[nm].stages.map((st, k) => { const ss = S.sideState(game, nm, k); return `<div class="stage ${ss.locked ? 'locked' : ''}" ${ss.locked ? '' : `data-side="${nm}:${k}"`}>
+          <div class="zone-main"><b>${ss.done ? '✅' : ss.locked ? '🔒' : '⭐'} ${st.title.replace(nm + ' · ', '')}</b>
+          <div class="zone-meta">${ss.locked ? ss.reason : `专属技能「${PERKS[st.perk].name}」：${PERKS[st.perk].desc}`}${ss.done ? ' · 已解锁' : ` · 🔩${st.reward.scrap}`}</div></div>
+          ${ss.locked ? '' : '<span class="zone-go">进入</span>'}</div>`; }).join('')}
+      </div>` : ''}`;
   }).join('');
   $('tab-people').innerHTML = `
     <div class="info-box cmd">
@@ -242,7 +253,12 @@ function renderTab() {
   else renderGo();
 }
 
-function renderAll() { renderTop(); renderStore(); renderTab(); }
+function renderRaid() {
+  const due = S.raidDue(game);
+  $('raidBar').classList.toggle('hidden', !due);
+  if (due) $('raidText').innerHTML = `⚠️ <b>今晚尸潮要来袭击据点！</b><br><small>守住指挥部撑过 5 波：奖励大量物资和食物；不迎战，就不能出征</small>`;
+}
+function renderAll() { renderTop(); renderStore(); renderRaid(); renderTab(); }
 
 function switchTab(t) { tab = t; renderTab(); }
 
@@ -283,6 +299,23 @@ $('tab-people').addEventListener('click', e => {
   if (e.target.closest('#btnResetTal')) { const r = S.resetTalents(game); toast(r.ok ? `已返还 ${r.pts} 个天赋点` : r.reason); save(); renderAll(); return; }
   const sq = e.target.closest('[data-squad]');
   if (sq) { const r = S.toggleSquad(game, sq.dataset.squad); if (!r.ok) toast(r.reason); sfx.play('click'); save(); renderPeople(); return; }
+  const ct = e.target.closest('[data-chat]');
+  if (ct) {
+    const nm = ct.dataset.chat;
+    if (!S.chatAvailable(game, nm)) { toast('出征一次回来再聊吧'); return; }
+    const lines = S.doChat(game, nm);
+    save();
+    playDialogue(lines, () => { toast(`❤️ 和${nm}的好感 +15`); renderAll(); });
+    return;
+  }
+  const sd = e.target.closest('[data-side]');
+  if (sd) {
+    const [nm, k] = sd.dataset.side.split(':');
+    const st = SIDE[nm].stages[+k];
+    sfx.play('click');
+    playDialogue(st.intro, () => startBattle({ side: { name: nm, k: +k } }));
+    return;
+  }
   const tr = e.target.closest('[data-train]');
   if (tr) { const r = S.trainComp(game, tr.dataset.train); if (!r.ok) toast(r.reason); else { sfx.play('build'); toast(r.ups ? `${tr.dataset.train} 升到 Lv${r.lv}！` : '训练完成，经验增加'); } save(); renderAll(); return; }
   if (!e.target.closest('#btnRecruit')) return;
@@ -296,6 +329,7 @@ $('tab-people').addEventListener('click', e => {
 });
 
 $('tab-go').addEventListener('click', e => {
+  if ((e.target.closest('[data-zone]') || e.target.closest('[data-stage]')) && S.raidDue(game)) { toast('⚠️ 尸潮要来了，先守住据点！'); return; }
   const stg = e.target.closest('[data-stage]');
   if (stg) {
     const i = +stg.dataset.stage;
@@ -307,6 +341,7 @@ $('tab-go').addEventListener('click', e => {
   }
   const sq = e.target.closest('[data-squad]');
   if (sq) { const r = S.toggleSquad(game, sq.dataset.squad); if (!r.ok) toast(r.reason); sfx.play('click'); save(); renderGo(); return; }
+  if ((e.target.closest('[data-zone]') || e.target.closest('[data-stage]')) && S.raidDue(game)) { toast('⚠️ 尸潮要来了，先守住据点！'); return; }
   const z = e.target.closest('[data-zone]');
   if (z) {
     const i = +z.dataset.zone;
@@ -320,6 +355,8 @@ $('tab-go').addEventListener('click', e => {
     game.weapon = k; sfx.play('click'); save(); renderGo(); return;
   }
 });
+
+$('btnRaid').addEventListener('click', () => { sfx.play('click'); startBattle({ raid: true }); });
 
 $('btnCollect').addEventListener('click', () => {
   S.tick(game, Date.now());
@@ -360,10 +397,18 @@ function playDialogue(lines, onDone) {
   $('dlg').classList.remove('hidden');
   nextLine();
 }
+function lineVisible(l) {
+  const c = l[2] && l[2].if;
+  if (!c) return true;
+  return c[0] === '!' ? !game.story.flags[c.slice(1)] : !!game.story.flags[c];
+}
 function nextLine() {
   if (!dlg) return;
   dlg.i++;
+  while (dlg.i < dlg.lines.length && dlg.lines[dlg.i][0] !== '?' && !lineVisible(dlg.lines[dlg.i])) dlg.i++;
   if (dlg.i >= dlg.lines.length) { endDialogue(); return; }
+  if (dlg.lines[dlg.i][0] === '?') { showChoice(dlg.lines[dlg.i]); return; }
+  $('dlgChoices').innerHTML = '';
   const [who, text] = dlg.lines[dlg.i];
   const nameEl = $('dlgName'), textEl = $('dlgText');
   nameEl.textContent = who;
@@ -379,6 +424,22 @@ function nextLine() {
     if (n >= text.length) { clearInterval(dlg.typing); dlg.typing = null; }
   }, 35);
 }
+// 剧情选择：选完设置标记、给奖励，然后接着播放回应台词
+function showChoice([, prompt, opts]) {
+  clearInterval(dlg.typing); dlg.typing = null;
+  dlg.choosing = true;
+  $('dlgName').textContent = '';
+  $('dlgText').classList.add('narr');
+  $('dlgText').textContent = prompt;
+  $('dlgChoices').innerHTML = opts.map((o, i) => `<button class="dlg-opt" data-opt="${i}">${o.text}</button>`).join('');
+  dlg.opts = opts;
+}
+// 跳过：直接快进，但遇到选择还是要停下来选
+function skipDialogue() {
+  clearInterval(dlg.typing); dlg.typing = null;
+  for (let i = dlg.i + 1; i < dlg.lines.length; i++) if (dlg.lines[i][0] === '?') { dlg.i = i - 1; nextLine(); return; }
+  endDialogue();
+}
 function endDialogue() {
   if (!dlg) return;
   clearInterval(dlg.typing);
@@ -389,7 +450,21 @@ function endDialogue() {
 }
 $('dlg').addEventListener('click', e => {
   if (!dlg) return;
-  if (e.target.closest('#dlgSkip')) { sfx.play('click'); endDialogue(); return; }
+  const opt = e.target.closest('[data-opt]');
+  if (opt && dlg.choosing) {
+    const o = dlg.opts[+opt.dataset.opt];
+    S.setFlags(game, o.set || {}, o.gain || {});
+    save();
+    sfx.play('build');
+    if (o.gain && (o.gain.scrap || o.gain.food)) toast(`获得 ${o.gain.scrap ? '🔩' + o.gain.scrap : ''} ${o.gain.food ? '🌽' + o.gain.food : ''}`);
+    dlg.choosing = false;
+    $('dlgChoices').innerHTML = '';
+    dlg.lines.splice(dlg.i + 1, 0, ...(o.reply || []));
+    nextLine();
+    return;
+  }
+  if (dlg.choosing) return; // 必须做出选择
+  if (e.target.closest('#dlgSkip')) { sfx.play('click'); skipDialogue(); return; }
   if (dlg.typing) { clearInterval(dlg.typing); dlg.typing = null; $('dlgText').textContent = dlg.full; return; }
   sfx.play('click');
   nextLine();
@@ -398,27 +473,33 @@ $('dlg').addEventListener('click', e => {
 // ---------- 战斗 ----------
 const joyIn = { x: 0, z: 0, on: false }, aimIn = { x: 0, z: 0, on: false }, keys = {};
 
-function startBattle({ stage = null } = {}) {
+async function startBattle({ stage = null, side = null, raid = false } = {}) {
   sfx.unlock();
   S.tick(game, Date.now());
   save();
   let story = null;
   if (stage !== null) { const { ch, st } = S.stageAt(stage); story = { ...st, index: stage, zone: ch.zone, chapterTitle: ch.title }; }
+  if (side) { const st = SIDE[side.name].stages[side.k]; story = { ...st, index: 'side', side }; }
+  // 先把这一局要用的模型下载好（队友 + 会出现的丧尸）
+  const enemies = story ? (story.enemies || []) : ['exploder', 'spitter', 'screamer', 'armored'];
+  const need = [...game.squad.map(n => COMPANIONS[n].model), ...['walker', 'runner', ...enemies].flatMap(t => ZOMBIE_MODEL[t] || [])];
+  if (story && story.npc && COMPANIONS[story.npc.name]) need.push(COMPANIONS[story.npc.name].model);
+  if (need.some(n => !hasModel(n))) { $('loading').classList.remove('hidden'); await ensureModels(need); $('loading').classList.add('hidden'); }
   battle = new Battle({
-    zoneIndex: story ? story.zone : game.zone, weaponKey: game.weapon, stats: S.battleStats(game, game.weapon),
-    cb: { onHud, onLevelUp, onEnd, onMsg, onHurt, onRadio }, story,
+    zoneIndex: story ? story.zone : raid ? 0 : game.zone, weaponKey: game.weapon, stats: S.battleStats(game, game.weapon),
+    cb: { onHud, onLevelUp, onEnd, onMsg, onHurt, onRadio }, story, raid: raid ? { save: game, power: S.raidPower(game) } : null,
   });
   $('hRadio').classList.remove('show');
-  $('sSurv').classList.toggle('hidden', !!story);
+  $('sSurv').classList.toggle('hidden', !!story || raid);
   $('sAmmo').classList.toggle('hidden', !story);
-  $('hObj').classList.toggle('hidden', !story);
+  $('hObj').classList.toggle('hidden', !story && !raid);
   battle.resize(innerWidth, innerHeight);
   mode = 'battle';
   $('baseUI').classList.add('hidden');
   $('battleUI').classList.remove('hidden');
   $('bossBar').classList.add('hidden');
   onHud(battle.hudData());
-  onMsg(story ? `${story.title}：${battle.objText()}` : `${ZONES[game.zone].name}：会自动开枪，右边拖动可以手动瞄准`);
+  onMsg(raid ? '🛡️ 尸潮来袭！守住指挥部，撑过 5 波' : story ? `${story.title}：${battle.objText()}` : `${ZONES[game.zone].name}：会自动开枪，右边拖动可以手动瞄准`);
   $('joyHint').classList.remove('off');
   setTimeout(() => $('joyHint').classList.add('off'), 6000);
 }
@@ -441,7 +522,7 @@ function onHud(d) {
   $('lvText').textContent = `Lv ${d.level}`;
   $('hTime').textContent = d.story ? mmss(d.t) : mmss(d.left);
   if (d.story) {
-    $('hAmmo').textContent = d.ammo;
+    $('hAmmo').textContent = Number.isFinite(d.ammo) ? Math.floor(d.ammo) : '∞';
     $('sAmmo').style.color = d.ammo <= 10 ? '#ff6b5b' : '';
     $('hObj').textContent = d.obj;
   }
@@ -449,6 +530,8 @@ function onHud(d) {
   $('hKills').textContent = d.kills;
   $('hScrap').textContent = d.scrap;
   $('hSurv').textContent = d.rescued;
+  const cb2 = $('coreBar');
+  if (d.core >= 0) { cb2.classList.remove('hidden'); $('coreFill').style.width = `${d.core * 100}%`; } else cb2.classList.add('hidden');
   const bb = $('bossBar');
   if (d.boss >= 0) { bb.classList.remove('hidden'); bb.querySelector('span').textContent = '☠️ ' + d.bossName; $('bossFill').style.width = `${d.boss * 100}%`; }
   else bb.classList.add('hidden');
@@ -491,7 +574,7 @@ function onEnd(r) {
   const sum = S.applyResult(game, r);
   S.tick(game, Date.now());
   save();
-  const title = r.win ? '🎉 成功撤离！' : r.retreat ? '🏃 撤退回据点' : '💀 你倒下了……';
+  const title = r.raid ? (r.win ? '🛡️ 守住了据点！' : '💥 据点被攻破了') : r.win ? (r.side || (r.story !== null && r.story !== undefined) ? '🎉 任务完成！' : '🎉 成功撤离！') : r.retreat ? '🏃 撤退回据点' : '💀 你倒下了……';
   const next = sum.firstClear ? (game.cleared < ZONES.length ? `<p class="good">🔓 解锁新区域：${ZONES[game.cleared].name}</p>` : '<p class="good">🏆 全部区域通关！你是末日传说！</p>') : '';
   const surv = sum.joined.length ? `<p class="good">🧑 ${sum.joined.join('、')} 加入了据点</p>` : '';
   const food = sum.extraFood ? `<p class="muted">宿舍住不下，获救者留下了 🌽${sum.extraFood} 食物</p>` : '';
@@ -504,12 +587,14 @@ function onEnd(r) {
       <div class="item-st">${itemStats(it)}</div>
       ${sum.itemScrap ? `<div class="muted">背包满了，已自动分解为 🔩${sum.itemScrap}</div>` : '<div class="muted">已放进背包，去「装备」页穿上</div>'}</div>`;
   } else if (r.win) drop = '<p class="muted">💡 撤离前击败尸王，可以获得装备</p>';
-  const isStory = r.story !== null && r.story !== undefined;
+  const isStory = r.story !== null && r.story !== undefined && !r.side && !r.raid;
   const stInfo = isStory ? S.stageAt(r.story) : null, nextSt = isStory ? S.stageAt(game.story.stage) : null;
-  const storyLine = sum.storyFirst
+  const storyLine = r.side ? (sum.storyFirst ? `<p class="good">⭐ ${SIDE[r.side.name].stages[r.side.k].title} 完成！</p>` : '') : !isStory ? '' : sum.storyFirst
     ? `<p class="good">📖 ${stInfo.st.title} 通关！${sum.chapterDone ? `「${stInfo.ch.title}」完成！` : ''}</p>${sum.storyJoin ? `<p class="good">🧑 「${sum.storyJoin}」加入了据点，可以带着出征了</p>` : ''}${nextSt ? `<p class="muted">下一关：${nextSt.st.title}</p>` : '<p class="good">🏆 主线全部通关！</p>'}`
     : (isStory && !r.win ? '<p class="muted">💡 打不过就回据点：升级军械库、强化武器、加天赋、带队友</p>' : '');
-  const growth = `<p class="muted">🎖️ 指挥官经验 +${sum.cmdXp}${sum.cmdUps ? `，<b class="good">升到 Lv${game.cmd.lv}（天赋点 +${sum.cmdUps}）</b>` : ''}${Object.entries(sum.compUps).filter(([, u]) => u).map(([nm]) => `，${nm} 升到 Lv${game.comps[nm].lv}`).join('')}</p>`;
+  const perkLine = sum.perk ? `<p class="good">⭐ 解锁 ${PERKS[sum.perk].who} 的专属技能「${PERKS[sum.perk].name}」：${PERKS[sum.perk].desc}</p>` : '';
+  const raidLine = r.raid ? (r.win ? `<p class="good">🛡️ 据点守住了！获得 🔩${sum.bonus} 🌽${Math.round(sum.bonus * 0.4)}，下次夜袭会更凶</p>` : `<p class="muted">💥 据点被攻破，损失 🔩${sum.raidLoss.scrap} 🌽${sum.raidLoss.food}（仓库被洗劫）</p>`) : '';
+  const growth = perkLine + raidLine + `<p class="muted">🎖️ 指挥官经验 +${sum.cmdXp}${sum.cmdUps ? `，<b class="good">升到 Lv${game.cmd.lv}（天赋点 +${sum.cmdUps}）</b>` : ''}${Object.entries(sum.compUps).filter(([, u]) => u).map(([nm]) => `，${nm} 升到 Lv${game.comps[nm].lv}`).join('')}</p>`;
   const showResult = () => setTimeout(() => {
     showModal(`<h2>${title}</h2>
       <div class="result">
@@ -517,10 +602,19 @@ function onEnd(r) {
         <div>击杀<b>${r.kills}</b></div>
         <div>带回物资<b>🔩 ${r.scrap}${sum.bonus ? ` + ${sum.bonus}` : ''}</b></div>
         <div>救出幸存者<b>${r.rescued}</b></div>
-      </div>${sum.bonus ? `<p class="good">${isStory ? '关卡奖励' : '撤离奖励'} 🔩${sum.bonus}${sum.firstClear ? '（首通双倍）' : ''}${sum.lootBonus ? ` · 拾荒 +${sum.lootBonus}` : ''}</p>` : ''}${storyLine}${growth}${drop}${next}${surv}${food}${isStory ? '' : tip}
+      </div>${sum.bonus && !r.raid ? `<p class="good">${isStory || r.side ? '关卡奖励' : '撤离奖励'} 🔩${sum.bonus}${sum.firstClear ? '（首通双倍）' : ''}${sum.lootBonus ? ` · 拾荒 +${sum.lootBonus}` : ''}</p>` : ''}${storyLine}${growth}${drop}${next}${surv}${food}${isStory ? '' : tip}
       <button class="btn big" data-act="home">返回据点</button>`, 500);
   }, r.win || r.retreat ? 200 : 900);
-  if (isStory && r.win) setTimeout(() => playDialogue(sum.chapterDone ? [...stInfo.st.outro, ...stInfo.ch.outro] : stInfo.st.outro, showResult), 600);
+  // 结局要等结尾对白里的最后一个选择做完再判定
+  const endingShow = sum.ending ? () => {
+    const e = S.pickEnding(game);
+    game.story.ending = e.key;
+    if (!game.story.endings.includes(e.key)) game.story.endings.push(e.key);
+    save();
+    playDialogue([['', `—— ${e.title} ——`], ...e.lines, ['', `你达成了「${e.title}」（已解锁 ${game.story.endings.length}/${ENDINGS.length} 个结局）。在关键时刻做出不同选择，会看到其他结局。`]], showResult);
+  } : showResult;
+  if (isStory && r.win) setTimeout(() => playDialogue(sum.chapterDone ? [...stInfo.st.outro, ...stInfo.ch.outro] : stInfo.st.outro, endingShow), 600);
+  else if (r.side && r.win) setTimeout(() => playDialogue(SIDE[r.side.name].stages[r.side.k].outro, showResult), 600);
   else showResult();
 }
 

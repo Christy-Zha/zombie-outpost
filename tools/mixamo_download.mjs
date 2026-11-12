@@ -14,6 +14,18 @@ const JOBS = {
   player: { character: '2b100d25-62a3-4edf-a80b-4e68c4f8234e', name: 'Swat', anims: { idle: 'c9cd4ed4', run: 'c9c814a0', shoot: 'c9c94dfa', death: 'c9ceab40' } },
   zombie: { character: '3d9daeb8-c2d5-45ce-b835-7cd403c72fc7', name: 'Copzombie', anims: { walk: 'c9cbd4d9', run: 'c9c6b0ab', attack: 'c9cbd7ad', death: 'c9cc240a' } },
   mutant: { character: 'cccc84b6-d072-4972-99da-75c5702e25f6', name: 'Mutant', anims: { walk: 'c9c93a8c', run: 'c9c93cdc', attack: 'c9c93c1d', death: 'c9c93d98' } },
+  // 以下角色只下载模型本体（带 1 个动作），其他动作在游戏里共用 player / zombie 的（Mixamo 骨骼通用）
+  c_chen:  { character: '8833e228-8c3e-4a62-863a-9101c3ff053c', name: 'Chad（陈医生）', anims: { idle: 'c9cd4ed4' } },
+  c_min:   { character: '9f639098-16d2-423b-b688-146b0c183dd3', name: 'Jody（小敏）', anims: { idle: 'c9cd4ed4' } },
+  c_jie:   { character: '3bcbf3bf-63f7-435e-ba9e-f3f137aa639d', name: 'Josh（阿杰）', anims: { idle: 'c9cd4ed4' } },
+  c_zhou:  { character: 'cd89f125-a55a-495b-b924-d63d660ab882', name: 'Steve（周队长）', anims: { idle: 'c9cd4ed4' } },
+  c_xiao:  { character: '1b88326e-34c2-4e57-b582-6f8d8017343a', name: 'Olivia（林晓）', anims: { idle: 'c9cd4ed4' } },
+  z_exploder: { character: 'a4440477-3191-424b-8703-8126d1982f67', name: 'Pumpkinhulk（自爆者）', anims: { walk: 'c9cbd4d9' } },
+  z_spitter:  { character: '13c20d1a-c2b7-4725-99da-fe3bbeac2805', name: 'Parasite（喷吐者）', anims: { walk: 'c9cbd4d9' } },
+  z_screamer: { character: '2f8e576f-f69d-453e-830e-969a2f0217ea', name: 'Zombiegirl（尖叫者）', anims: { walk: 'c9cbd4d9' } },
+  z_armored:  { character: '3576fd60-beef-49ec-a3d0-f93231f4fc29', name: 'Warzombie（护甲丧尸）', anims: { walk: 'c9cbd4d9' } },
+  z_runner:   { character: '3c722a0f-8697-4ef2-93ba-d02155ecaf51', name: 'Prisoner（疾行者）', anims: { walk: 'c9cbd4d9' } },
+  z_walker2:  { character: '456c351c-71fb-420b-9e85-e1aca7273d2d', name: 'Yaku（丧尸变体）', anims: { walk: 'c9cbd4d9' } },
 };
 
 const only = process.argv[2];
@@ -57,7 +69,7 @@ for (const [who, job] of Object.entries(JOBS)) {
     const out = path.join(dir, anim + '.fbx');
     if (fs.existsSync(out) && fs.statSync(out).size > 10000) { console.log(`⏭  ${who}/${anim}.fbx 已存在`); continue; }
     process.stdout.write(`⬇️  ${job.name} · ${anim} … `);
-    const r = await exportOne(job.character, shortId + SUFFIX, job.name);
+    const r = await exportOne(job.character, shortId + SUFFIX, who); // 文件名只能用英文
     if (r.error) { console.log('❌', r.error); continue; }
     const res = await fetch(r.url);
     if (!res.ok) { console.log('❌ 下载失败', res.status); continue; }

@@ -1,10 +1,10 @@
 // 离线缓存：先用缓存秒开，同时后台悄悄更新，下次打开就是新版本
 // 发布新版本时，把 CACHE 的版本号 +1
-const CACHE = 'zombie-outpost-v7';
+const CACHE = 'zombie-outpost-v8';
 const ASSETS = [
   './', './index.html', './style.css', './manifest.webmanifest',
   './js/main.js', './js/data.js', './js/save.js', './js/battle.js', './js/base.js', './js/util.js', './js/sfx.js',
-  './js/story.js', './js/models.js', './js/env.js',
+  './js/story.js', './js/side.js', './js/models.js', './js/env.js',
   './vendor/three.module.min.js', './vendor/GLTFLoader.js', './vendor/SkeletonUtils.js', './vendor/utils/BufferGeometryUtils.js',
   // 注意：models/*.glb 不在预缓存清单里（公开仓库不带模型），有的话首次加载时会被自动缓存
   // 写实场景素材（Poly Haven，CC0）

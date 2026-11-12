@@ -1,11 +1,12 @@
 // 战斗：3D 俯视角割草射击
 // 性能要点：丧尸/子弹/经验球/粒子都用 InstancedMesh（同类物体一次画完），手机上也能撑几百只丧尸
 import * as THREE from '../vendor/three.module.min.js';
-import { WEAPONS, ZOMBIES, ZONES, SKILLS, BATTLE_TIME, BOSS_TIME, COMPANIONS } from './data.js';
+import { WEAPONS, ZOMBIES, ZONES, SKILLS, BATTLE_TIME, BOSS_TIME, COMPANIONS, ZOMBIE_MODEL } from './data.js';
 import { rand, clamp, mergeColored, zombieGeometry, personGroup, groundTexture, disposeScene, box, cyl } from './util.js';
 import { sfx } from './sfx.js';
 import { hasModel, Rig, RigPool } from './models.js';
 import { envReady, hasProp, prop, propInstances, pbr } from './env.js';
+import { buildCompound, PLOTS, TOWERS } from './base.js';
 
 // 每个区域的写实地面贴图（Poly Haven）
 const ZONE_GROUND = ['brown_mud_leaves_01', 'asphalt_02', 'concrete_floor_01', 'brown_mud', 'concrete_tiles'];
@@ -37,7 +38,8 @@ function compact(arr) {
 }
 
 export class Battle {
-  constructor({ zoneIndex, weaponKey, stats, cb, story = null }) {
+  constructor({ zoneIndex, weaponKey, stats, cb, story = null, raid = null }) {
+    this.raid = raid; // 夜袭守城：{ save, power }
     this.story = story; // 剧情模式配置（null = 普通割草出征）
     this.zoneIndex = zoneIndex;
     this.zone = ZONES[zoneIndex];
@@ -56,6 +58,7 @@ export class Battle {
     this.useRigs = hasModel('zombie');
     this.maxZ = story ? story.maxAlive : this.useRigs ? 45 : MAXZ;
     this.ammo = story ? Math.round(story.ammo * (stats.ammoMul || 1)) : Infinity;
+    if (raid) this.maxZ = this.useRigs ? 50 : 160;
     this.allies = []; this.winT = 0; this.radioI = 0; this.hold = null; this.npcSpot = null; this.npc = null; this.outMsgT = 0;
     this.noAmmoMsg = 0;
     this.objs = []; this.objGot = 0; this.exit = null; this.corpses = [];
@@ -88,11 +91,11 @@ export class Battle {
     const Z = this.zone;
     const s = this.scene = new THREE.Scene();
     const fog = new THREE.Color(Z.fog);
-    if (this.story) fog.setHex(0x06080b); // 剧情模式：深夜
+    if (this.story || this.raid) fog.setHex(0x06080b); // 剧情 / 夜袭：深夜
     s.background = fog;
     s.fog = new THREE.Fog(fog, 30, 60);
     this.camera = new THREE.PerspectiveCamera(55, 1, 0.5, 120);
-    const night = !!this.story;
+    const night = !!this.story || !!this.raid;
     s.add(new THREE.HemisphereLight(night ? 0x6a7aa8 : 0xdfe6d0, 0x40382c, night ? 0.55 : 1.6));
     const sun = new THREE.DirectionalLight(night ? 0x8fa4d8 : 0xffeedd, night ? 0.3 : 1.8);
     if (night) {
@@ -113,13 +116,15 @@ export class Battle {
     ground.rotation.x = -Math.PI / 2;
     s.add(ground);
 
-    this.buildProps();
+    if (this.raid) this.buildRaid(); else this.buildProps();
 
     // 玩家
     this.player = personGroup({ shirt: 0x2f6fdb });
     s.add(this.player);
     if (hasModel('player')) { this.pRig = new Rig('player', 1.8); s.add(this.pRig.group); this.player.visible = false; this.pRig.play('idle'); }
-    if (this.useRigs) this.pools = { zombie: new RigPool(s, 'zombie', 1.8), mutant: hasModel('mutant') ? new RigPool(s, 'mutant', 1.8) : null };
+    if (this.useRigs) this.pools = {};
+    this.spits = [];
+    this.sMesh = inst(s, new THREE.SphereGeometry(0.22, 8, 6), new THREE.MeshBasicMaterial({ color: 0x9dff4a }), 120, false);
     const blobGeo = new THREE.CircleGeometry(0.5, 14).rotateX(-Math.PI / 2);
     const blobMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.3, depthWrite: false });
     this.pShadow = new THREE.Mesh(blobGeo, blobMat);
@@ -165,7 +170,88 @@ export class Battle {
     if (this.story) this.buildStory();
     // 带上队友（营救关里被救的那个人不能同时当队友）
     const squad = (this.base.squad || []).filter(m => COMPANIONS[m.name] && !(this.story && this.story.npc && this.story.npc.name === m.name));
-    squad.forEach((m, i) => this.addAlly(m.name, COMPANIONS[m.name], m.mul, i));
+    squad.forEach((m, i) => this.addAlly(m.name, COMPANIONS[m.name], m.mul, i, false, m.perks || []));
+  }
+
+  getPool(model) {
+    if (!this.pools[model]) this.pools[model] = new RigPool(this.scene, model, 1.8);
+    return this.pools[model];
+  }
+
+  // 爆炸：伤害范围内的丧尸（无视护甲）；hurtsUs = 也会炸到你和队友（自爆者）
+  explode(x, z, r, dmg, hurtsUs = false) {
+    for (const zb of this.zs) if (!zb.dead && (zb.x - x) ** 2 + (zb.z - z) ** 2 < (r + zb.r) ** 2) this.hurtZombie(zb, dmg, zb.x - x, zb.z - z, 7, true);
+    if (hurtsUs) {
+      const p = this.p;
+      if ((p.x - x) ** 2 + (p.z - z) ** 2 < r * r && p.invuln <= 0) this.hurtPlayer(dmg);
+      for (const a of this.allies) if (!a.down && (a.x - x) ** 2 + (a.z - z) ** 2 < r * r) this.hurtAlly(a, dmg);
+    }
+    this.burst(x, 0.6, z, 30, 0xffa040, 8, 0.22);
+    this.burst(x, 0.4, z, 14, 0x333333, 5, 0.25);
+    this.shake = Math.max(this.shake, 0.35);
+    sfx.play('boom');
+  }
+
+  // ---------- 夜袭守城：在自己的据点里守住指挥部 ----------
+  buildRaid() {
+    const save = this.raid.save, s = this.scene;
+    const flat = (w, h, m, y, x = 0, z = 0) => { const g = new THREE.Mesh(new THREE.PlaneGeometry(w, h), m); g.rotation.x = -Math.PI / 2; g.position.set(x, y, z); s.add(g); };
+    if (envReady()) {
+      flat(18.6, 13.6, pbr('concrete_floor_01', { repeat: [6, 4.5], lambert: true }), 0.02);
+      flat(18.6, 1.9, pbr('asphalt_02', { repeat: [7, 0.7], lambert: true }), 0.03);
+    }
+    const c = buildCompound(save);
+    s.add(c.group);
+    this.campFlame = c.flame;
+    for (const k of Object.keys(PLOTS)) { const [x, z] = PLOTS[k]; this.addCollider(x, z, 1.6); }
+    for (const [x, z] of TOWERS) this.addCollider(x, z, 0.7);
+    this.addCollider(0, 0, 0.9); // 篝火
+    const [hx, hz] = PLOTS.hq;
+    this.core = { x: hx, z: hz + 1.9, hp: 0, max: 0 };
+    this.core.max = this.core.hp = 800 + 250 * (save.buildings.hq || 1);
+    this.turretLv = save.buildings.turret || 0;
+    this.turrets = this.turretLv > 0 ? TOWERS.map(([x, z]) => ({ x, z, cd: rand(0, 1) })) : [];
+    this.wave = 0; this.waves = 5; this.waveT = 4; this.p.z = 2;
+  }
+
+  updateRaid(dt) {
+    const pow = this.raid.power;
+    // 下一波：场上快清完了，或者等太久
+    this.waveT -= dt;
+    if (this.wave < this.waves && (this.waveT <= 0 || (this.wave > 0 && this.zs.length <= 3))) {
+      this.wave++;
+      this.waveT = 45;
+      const n = Math.round((10 + this.wave * 5) * Math.min(2, pow));
+      const types = ['walker', 'walker', 'walker', 'runner', 'runner'];
+      if (this.wave >= 2) types.push('exploder', 'spitter');
+      if (this.wave >= 3) types.push('armored', 'screamer', 'brute');
+      for (let i = 0; i < n && this.zs.length < this.maxZ; i++) {
+        const a = Math.random() * TAU, r = rand(20, 27);
+        const zb = this.spawnZombie(types[Math.floor(Math.random() * types.length)], Math.sin(a) * r, Math.cos(a) * r);
+        zb.hp *= pow; zb.maxHp = zb.hp;
+      }
+      if (this.wave === this.waves) {
+        const a = Math.random() * TAU;
+        this.boss = this.spawnZombie('boss', Math.sin(a) * 24, Math.cos(a) * 24);
+        this.boss.hp *= 0.6 * pow; this.boss.maxHp = this.boss.hp;
+        this.cb.onMsg('☠️ 最后一波！首领来了！');
+        sfx.play('boss');
+      } else this.cb.onMsg(`⚠️ 第 ${this.wave}/${this.waves} 波尸潮！`);
+    }
+    // 炮塔自动开火
+    const tdmg = 12 * (1 + 0.35 * this.turretLv) * pow ** 0.5, trate = 2 + 0.15 * this.turretLv;
+    for (const t of this.turrets) {
+      t.cd -= dt;
+      if (t.cd > 0) continue;
+      const z = this.nearest(t.x, t.z, 14);
+      if (!z) { t.cd = 0.2; continue; }
+      t.cd = 1 / trate;
+      const a = Math.atan2(z.x - t.x, z.z - t.z), sp = 30;
+      if (this.bullets.length < MAXB) this.bullets.push({ x: t.x, z: t.z, vx: Math.sin(a) * sp, vz: Math.cos(a) * sp, ang: a, life: 0.6, pierce: 0, dmg: tdmg, hits: [], dead: false });
+    }
+    if (this.campFlame) this.campFlame.scale.y = 1 + Math.sin(this.t * 17) * 0.2;
+    if (this.core.hp <= 0) { this.core.hp = 0; this.cb.onMsg('💥 指挥部被攻破了……'); this.end(false); return; }
+    if (this.wave >= this.waves && this.zs.length === 0) this.winSoon('🎉 守住了！尸潮退去了');
   }
 
   // ---------- 剧情关卡：搜集 / 坚守 / 营救护送 / Boss ----------
@@ -355,14 +441,16 @@ export class Battle {
   }
 
   // ---------- 队友（电脑操控） ----------
-  addAlly(name, def, mul = 1, slot = 0, npc = false) {
+  addAlly(name, def, mul = 1, slot = 0, npc = false, perks = []) {
     const hp = def.hp * mul * (this.story ? 1.6 : 1);
     const a = {
       name, def, npc, slot, mul, x: this.p.x + (slot === 1 ? 1.5 : -1.5), z: this.p.z - 1.2,
       hp, maxHp: hp, fireCd: rand(0.3, 0.9), face: 0, aim: 0, aimT: 0, mvAng: 0, moving: false,
       down: false, revive: 0, skillCd: 5 + slot * 2, invuln: 0, walk: 0,
     };
-    if (hasModel('player')) { a.rig = new Rig('player', 1.72); a.rig.tint(def.color, 0.55); this.scene.add(a.rig.group); a.rig.play('idle'); }
+    a.perks = new Set(perks);
+    const own = def.model && hasModel(def.model);
+    if (own || hasModel('player')) { a.rig = new Rig(own ? def.model : 'player', 1.72); if (!own) a.rig.tint(def.color, 0.55); this.scene.add(a.rig.group); a.rig.play('idle'); }
     else { a.body = personGroup({ shirt: def.color }); this.scene.add(a.body); }
     this.allies.push(a);
     return a;
@@ -370,6 +458,7 @@ export class Battle {
 
   hurtAlly(a, dmg) {
     if (a.down || a.invuln > 0) return;
+    if (a.perks && a.perks.has('jie_armor')) dmg *= 0.7;
     a.hp -= dmg; a.invuln = 0.6;
     if (a.hp <= 0) {
       a.hp = 0; a.down = true; a.revive = 0;
@@ -390,9 +479,15 @@ export class Battle {
 
   updateAllies(dt) {
     const p = this.p;
+    if (this.allies.some(a => !a.down && a.perks.has('xiao_vaccine'))) {
+      p.hp = Math.min(p.maxHp, p.hp + 2 * dt);
+      for (const a of this.allies) if (!a.down) a.hp = Math.min(a.maxHp, a.hp + 2 * dt);
+    }
     for (const a of this.allies) {
       if (a.down) {
-        if (Math.hypot(p.x - a.x, p.z - a.z) < 1.8) {
+        // 陈医生的“不放弃任何人”：倒地 6 秒后自动扶起
+        if (this.allies.some(b => b !== a && !b.down && b.perks.has('doc_revive'))) { a.autoRev = (a.autoRev || 0) + dt; if (a.autoRev >= 6) { a.autoRev = 0; a.revive = 2; } }
+        if (Math.hypot(p.x - a.x, p.z - a.z) < 1.8 || a.revive >= 2) {
           a.revive += dt;
           if (a.revive >= 2) { a.down = false; a.hp = a.maxHp * 0.5; a.revive = 0; a.invuln = 1.5; this.cb.onMsg(`💪 ${a.name} 重新站起来了`); sfx.play('rescue'); }
         } else a.revive = Math.max(0, a.revive - dt * 0.5);
@@ -415,15 +510,17 @@ export class Battle {
       if (a.fireCd <= 0) {
         const t = a.def.skill === 'snipe' ? this.biggest(a.x, a.z, w.range) : this.nearest(a.x, a.z, w.range);
         if (t) {
-          a.fireCd = 1 / w.rate;
-          const base = Math.atan2(t.x - a.x, t.z - a.z), n = w.count || 1, arc = w.spread || 0;
+          a.fireCd = 1 / (w.rate * (a.perks.has('zhou_rate') ? 1.3 : 1));
+          const base = Math.atan2(t.x - a.x, t.z - a.z), n = (w.count || 1) + (a.perks.has('jie_pellets') ? 2 : 0), arc = w.spread || 0;
           a.aim = base; a.aimT = 0.5;
-          const dmg = w.dmg * a.mul * this.base.dmgMul;
+          const crit = a.perks.has('min_crit') && Math.random() < 0.25 ? 2.5 : 1;
+          const dmg = w.dmg * a.mul * this.base.dmgMul * crit;
           for (let i = 0; i < n && this.bullets.length < MAXB; i++) {
             let ang = n > 1 ? base - arc / 2 + arc * i / (n - 1) : base;
             ang += (Math.random() - 0.5) * (w.jitter || 0.05);
             const sp = 26;
-            this.bullets.push({ x: a.x + Math.sin(ang) * 0.6, z: a.z + Math.cos(ang) * 0.6, vx: Math.sin(ang) * sp, vz: Math.cos(ang) * sp, ang, life: w.range / sp + 0.1, pierce: w.pierce || 0, dmg, hits: [], dead: false });
+            const pc = (w.pierce || 0) + (a.perks.has('min_pierce') ? 2 : 0);
+            this.bullets.push({ x: a.x + Math.sin(ang) * 0.6, z: a.z + Math.cos(ang) * 0.6, vx: Math.sin(ang) * sp, vz: Math.cos(ang) * sp, ang, life: w.range / sp + 0.1, pierce: pc, pen: pc > 0, dmg, hits: [], dead: false });
           }
           sfx.play('smg');
         } else a.fireCd = 0.2;
@@ -434,17 +531,19 @@ export class Battle {
         const sk = a.def.skill;
         if (sk === 'heal') {
           a.skillCd = 10;
-          p.hp = Math.min(p.maxHp, p.hp + p.maxHp * 0.12);
-          for (const b of this.allies) if (!b.down) b.hp = Math.min(b.maxHp, b.hp + b.maxHp * 0.12);
+          const amt = a.perks.has('doc_heal') ? 0.2 : 0.12;
+          p.hp = Math.min(p.maxHp, p.hp + p.maxHp * amt);
+          for (const b of this.allies) if (!b.down) b.hp = Math.min(b.maxHp, b.hp + b.maxHp * amt);
           this.burst(p.x, 1.2, p.z, 12, 0x5dff8a, 3, 0.12);
           sfx.play('gem');
         } else if (sk === 'grenade') {
           const cand = this.zs.filter(z => !z.dead && (z.x - a.x) ** 2 + (z.z - a.z) ** 2 < 13 * 13);
           if (cand.length) {
-            a.skillCd = 12;
+            const big = a.perks.has('zhou_grenade');
+            a.skillCd = big ? 8 : 12;
             const c = cand[Math.floor(Math.random() * cand.length)];
             const dmg = 45 * a.mul * this.base.dmgMul;
-            for (const z of this.zs) if (!z.dead && (z.x - c.x) ** 2 + (z.z - c.z) ** 2 < 9) this.hurtZombie(z, dmg, z.x - c.x, z.z - c.z, 6);
+            for (const z of this.zs) if (!z.dead && (z.x - c.x) ** 2 + (z.z - c.z) ** 2 < (big ? 20 : 9)) this.hurtZombie(z, dmg, z.x - c.x, z.z - c.z, 6, true);
             this.burst(c.x, 0.5, c.z, 26, 0xffa040, 7, 0.2);
             this.shake = Math.max(this.shake, 0.2);
             sfx.play('boom');
@@ -636,11 +735,13 @@ export class Battle {
     this.updateZombies(dt);
     if (this.over) return;
     this.updateBullets(dt);
+    this.updateSpits(dt);
     this.updateSaws(dt);
     this.updateMolotov(dt);
     this.updatePickups(dt);
     this.updateParticles(dt);
-    if (this.story) this.updateStory(dt); else this.updateBeacon(dt);
+    if (this.raid) this.updateRaid(dt); else if (this.story) this.updateStory(dt); else this.updateBeacon(dt);
+    if (this.over) return;
     this.updateSpawns(dt);
     compact(this.zs);
     compact(this.bullets);
@@ -651,7 +752,7 @@ export class Battle {
     if (this.hudAcc <= 0) { this.hudAcc = 0.1; this.cb.onHud(this.hudData()); }
 
     if (p.hp <= 0) { p.hp = 0; this.cb.onHud(this.hudData()); this.end(false); return; }
-    if (!this.story && this.t >= BATTLE_TIME) { this.end(true); return; }
+    if (!this.story && !this.raid && this.t >= BATTLE_TIME) { this.end(true); return; }
     if (this.winT > 0) { this.winT -= dt; if (this.winT <= 0) { this.end(true); return; } }
     if (this.over) return;
     if (this.pendingLevels > 0) {
@@ -667,8 +768,9 @@ export class Battle {
       hp: p.hp, maxHp: p.maxHp, xp: this.xp, need: this.need(this.level + this.pendingLevels), level: this.level,
       left: Math.max(0, BATTLE_TIME - this.t), kills: this.kills, scrap: Math.floor(this.scrap), rescued: this.rescued,
       boss: this.boss ? this.boss.hp / this.boss.maxHp : -1,
-      story: !!this.story, t: this.t, ammo: this.ammo, bossName: (this.story && this.story.bossName) || '尸王',
-      obj: this.story ? this.objText() : '',
+      story: !!this.story || !!this.raid, t: this.t, ammo: this.ammo, bossName: (this.story && this.story.bossName) || '尸王',
+      obj: this.raid ? `🛡️ 守住指挥部 · 第 ${this.wave}/${this.waves} 波` : this.story ? this.objText() : '',
+      core: this.core ? this.core.hp / this.core.max : -1,
       allies: this.allies.map(a => ({ name: a.name, icon: a.def.icon || '🧑', hp: a.hp, max: a.maxHp, down: a.down, revive: a.revive, npc: a.npc })),
     };
   }
@@ -725,7 +827,7 @@ export class Battle {
       if (this.t - this.noAmmoMsg > 4) { this.noAmmoMsg = this.t; this.cb.onMsg('🔫 没子弹了！去找绿色弹药箱'); }
       return;
     }
-    this.ammo--;
+    this.ammo = Math.max(0, this.ammo - (w.ammoCost || 1));
     p.fireCd = 1 / this.rate;
     p.aim = base; p.aimT = 0.5;
     const n = this.count;
@@ -739,7 +841,7 @@ export class Battle {
       this.bullets.push({
         x: p.x + Math.sin(a) * 0.7, z: p.z + Math.cos(a) * 0.7,
         vx: Math.sin(a) * sp, vz: Math.cos(a) * sp, ang: a,
-        life: w.life, pierce, dmg, hits: [], dead: false,
+        life: w.life, pierce, dmg, hits: [], dead: false, kind: w.kind, blast: w.blast, pen: pierce > 0 || !!w.kind,
       });
     }
     p.recoil = 1;
@@ -759,13 +861,44 @@ export class Battle {
         const da = Math.hypot(a.x - z.x, a.z - z.z) * (a.def.skill === 'tank' ? 0.6 : 1);
         if (da < best) { best = da; tgt = a; tx = a.x; tz = a.z; }
       }
+      const core = this.core;
+      if (core && best > 7) { tgt = core; tx = core.x; tz = core.z; }
       let dx = tx - z.x, dz = tz - z.z;
       const d = Math.hypot(dx, dz) || 0.001;
       dx /= d; dz /= d;
       let spd = z.spd;
-      for (const a of slowers) if ((a.x - z.x) ** 2 + (a.z - z.z) ** 2 < 25) { spd *= 0.6; break; }
-      z.x += (dx * spd + z.kx) * dt;
-      z.z += (dz * spd + z.kz) * dt;
+      if (core) {
+        const inBand = Math.abs(z.x) < 10 && Math.abs(z.z) < 7.4 && (Math.abs(z.x) > 8.6 || Math.abs(z.z) > 6.1);
+        if (inBand && !(Math.abs(z.x) < 1.6 && z.z > 0)) spd *= 0.3; // 翻越围墙（大门除外）
+        if (tgt === core && d < 1.6 + z.r) { core.hp -= z.dmg * 1.4 * dt * (z.type === 'boss' ? 4 : 1); if (z.rig && z.rig.has('attack')) z.rig.play('attack'); continue; }
+      }
+      for (const a of slowers) if ((a.x - z.x) ** 2 + (a.z - z.z) ** 2 < 25) { spd *= a.perks.has('xiao_slow') ? 0.4 : 0.6; break; }
+      if (z.rage > 0) { z.rage -= dt; spd *= 1.5; }
+      // 远程型（喷吐者 / 尖叫者）：保持距离、绕圈
+      let mdx = dx, mdz = dz;
+      const keep = z.def.keep;
+      if (keep) {
+        if (d < keep - 1) { mdx = -dx; mdz = -dz; }
+        else if (d < keep + 2) { const side = z.id % 2 ? 1 : -1; mdx = -dz * side * 0.6; mdz = dx * side * 0.6; }
+        z.cd = (z.cd || rand(1, 3)) - dt;
+        if (z.cd <= 0 && d < keep + 5) {
+          if (z.type === 'spitter') {
+            z.cd = 2.6;
+            const sp = 9;
+            if (this.spits.length < 120) this.spits.push({ x: z.x, z: z.z, vx: dx * sp, vz: dz * sp, life: 2.2, dmg: z.def.spit * z.dmgMul });
+            if (z.rig && z.rig.has('attack')) z.rig.play('attack', { speed: 1.6 });
+          } else if (z.type === 'screamer') {
+            z.cd = 7;
+            let n = 0;
+            for (const o of this.zs) if (!o.dead && o !== z && (o.x - z.x) ** 2 + (o.z - z.z) ** 2 < 81) { o.rage = 5; n++; }
+            this.burst(z.x, 1.6, z.z, 24, 0xff3050, 6, 0.14);
+            sfx.play('boss');
+            if (!this.screamMsg) { this.screamMsg = true; this.cb.onMsg('😱 尖叫者让尸群狂暴了！先打它！'); }
+          }
+        }
+      }
+      z.x += (mdx * spd + z.kx) * dt;
+      z.z += (mdz * spd + z.kz) * dt;
       z.kx -= z.kx * decay; z.kz -= z.kz * decay;
       z.ang = Math.atan2(dx, dz);
       z.phase += dt * z.spd * 2.2;
@@ -776,8 +909,10 @@ export class Battle {
         if (d < hr + 0.9 && z.rig.has('attack')) z.rig.play('attack', { speed: 1.2 });
         else z.rig.play(z.type === 'runner' && z.rig.has('run') ? 'run' : 'walk', { speed: z.animSpd });
       }
-      if (d < hr + 0.15) { if (tgt === p) { if (p.invuln <= 0) this.hurtPlayer(z.dmg); } else this.hurtAlly(tgt, z.dmg); }
-      if (d < hr) { z.x = tx - dx * hr; z.z = tz - dz * hr; }
+      if (z.type === 'exploder' && d < hr + 0.9) { this.kill(z); continue; } // 冲到身边就爆
+      const cdmg = z.dmg * (z.rage > 0 ? 1.3 : 1);
+      if (d < hr + 0.15 && cdmg > 0 && tgt !== this.core) { if (tgt === p) { if (p.invuln <= 0) this.hurtPlayer(cdmg); } else this.hurtAlly(tgt, cdmg); }
+      if (d < hr && tgt !== this.core) { z.x = tx - dx * hr; z.z = tz - dz * hr; }
     }
     // 丧尸之间互相挤开，避免叠成一团
     for (let i = 0; i < zs.length; i++) {
@@ -810,8 +945,9 @@ export class Battle {
     this.cb.onHurt && this.cb.onHurt();
   }
 
-  hurtZombie(z, dmg, kx, kz, kb = 3) {
+  hurtZombie(z, dmg, kx, kz, kb = 3, pen = false) {
     if (z.dead) return;
+    if (z.def.armor && !pen) dmg *= z.def.armor; // 护甲：普通子弹只打出 40%
     z.hp -= dmg;
     z.flash = 0.1;
     if (z.rig) z.rig.flash(0.08);
@@ -824,8 +960,10 @@ export class Battle {
   }
 
   kill(z) {
+    if (z.dead) return;
     z.dead = true;
     this.kills++;
+    if (z.def.blast) this.explode(z.x, z.z, z.def.blast, z.def.blastDmg * z.dmgMul, true);
     if (z.rig) { // 播放倒地动作，过一会儿淡出再回收
       if (z.rig.has('death')) z.rig.play('death', { once: true, fade: 0.1 });
       this.corpses.push({ rig: z.rig, pool: z.pool, t: 2.4 });
@@ -876,12 +1014,13 @@ export class Battle {
     const zs = this.zs;
     for (const b of this.bullets) {
       b.life -= dt;
-      if (b.life <= 0) { b.dead = true; continue; }
+      if (b.kind === 'flame' && Math.random() < 0.5) this.burst(b.x, 0.9, b.z, 1, Math.random() < 0.5 ? 0xff8a1a : 0xffd040, 1.2, 0.22);
+      if (b.life <= 0) { b.dead = true; if (b.kind === 'grenade') this.explode(b.x, b.z, b.blast, b.dmg); continue; }
       const steps = Math.max(1, Math.ceil(Math.hypot(b.vx, b.vz) * dt / 0.5));
       const sdt = dt / steps;
       for (let s = 0; s < steps && !b.dead; s++) {
         b.x += b.vx * sdt; b.z += b.vz * sdt;
-        if (this.inCollider(b.x, b.z)) { b.dead = true; this.burst(b.x, 1, b.z, 2, 0xffd27a, 3, 0.08); break; }
+        if (this.inCollider(b.x, b.z)) { b.dead = true; if (b.kind === 'grenade') this.explode(b.x, b.z, b.blast, b.dmg); else this.burst(b.x, 1, b.z, 2, 0xffd27a, 3, 0.08); break; }
         const near = this.queryNear(b.x, b.z);
         for (let k = 0; k < near.length; k++) {
           const z = zs[near[k]];
@@ -889,14 +1028,27 @@ export class Battle {
           const dx = z.x - b.x, dz = z.z - b.z, rr = z.r + 0.18;
           if (dx * dx + dz * dz < rr * rr) {
             b.hits.push(z.id);
-            this.hurtZombie(z, b.dmg, b.vx, b.vz);
-            this.burst(b.x, 1, b.z, 2, 0x8a2a1a, 3, 0.1);
-            sfx.play('hit');
+            if (b.kind === 'grenade') { b.dead = true; this.explode(b.x, b.z, b.blast, b.dmg); break; }
+            this.hurtZombie(z, b.dmg, b.vx, b.vz, b.kind === 'flame' ? 0.5 : 3, b.pen);
+            if (b.kind !== 'flame') { this.burst(b.x, 1, b.z, 2, 0x8a2a1a, 3, 0.1); sfx.play('hit'); }
             if (--b.pierce < 0) { b.dead = true; break; }
           }
         }
       }
     }
+  }
+
+  // 喷吐者的酸液
+  updateSpits(dt) {
+    const p = this.p;
+    for (const sp of this.spits) {
+      sp.life -= dt;
+      sp.x += sp.vx * dt; sp.z += sp.vz * dt;
+      if (sp.life <= 0 || this.inCollider(sp.x, sp.z)) { sp.dead = true; continue; }
+      if ((sp.x - p.x) ** 2 + (sp.z - p.z) ** 2 < 0.5) { sp.dead = true; if (p.invuln <= 0) this.hurtPlayer(sp.dmg); this.burst(sp.x, 1, sp.z, 6, 0x9dff4a, 3, 0.1); continue; }
+      for (const a of this.allies) if (!a.down && (sp.x - a.x) ** 2 + (sp.z - a.z) ** 2 < 0.5) { sp.dead = true; this.hurtAlly(a, sp.dmg); break; }
+    }
+    compact(this.spits);
   }
 
   // 环绕电锯
@@ -1059,8 +1211,13 @@ export class Battle {
 
   pickType() {
     const t = this.t + this.zoneIndex * 15, r = Math.random();
-    if (t > ZOMBIES.brute.from && r < 0.07) return 'brute';
-    if (t > ZOMBIES.runner.from && r < 0.07 + 0.25) return 'runner';
+    // 新敌人：剧情关按关卡配置出现；割草按时间逐步出现
+    const extra = this.story ? (this.story.enemies || []) : ['exploder', 'spitter', 'screamer', 'armored'].filter(k => t > ZOMBIES[k].from);
+    const W = { exploder: 0.07, spitter: 0.06, screamer: 0.03, armored: 0.06 };
+    let acc = 0;
+    for (const k of extra) { acc += W[k]; if (r < acc) return k; }
+    if (t > ZOMBIES.brute.from && r < acc + 0.07) return 'brute';
+    if (t > ZOMBIES.runner.from && r < acc + 0.07 + 0.25) return 'runner';
     return 'walker';
   }
 
@@ -1080,13 +1237,16 @@ export class Battle {
       r: 0.42 * s, s, m: type === 'boss' ? 40 : s * s, tr: tint.r, tg: tint.g, tb: tint.b,
       flash: 0, phase: rand(0, 6), kx: 0, kz: 0, sawCd: 0, ang: 0, dead: false,
     };
+    zb.dmgMul = (1 + this.zoneIndex * 0.25) * (this.story ? 1.3 : 1);
     if (this.story) { zb.hp *= this.story.hp; zb.maxHp = zb.hp; zb.dmg *= 1.3; }
     zb.animSpd = zb.spd / d.spd; // 走得快的丧尸动画也播快一点
     if (this.pools) {
-      const big = (type === 'brute' || type === 'boss') && this.pools.mutant;
-      zb.pool = big ? this.pools.mutant : this.pools.zombie;
+      // 每种丧尸用自己的模型（没下载到就用普通丧尸代替）
+      const opts = (ZOMBIE_MODEL[type] || ['zombie']).filter(hasModel);
+      const model = opts.length ? opts[Math.floor(Math.random() * opts.length)] : 'zombie';
+      zb.pool = this.getPool(model);
       zb.rig = zb.pool.get();
-      zb.rig.group.scale.setScalar(big ? s / 1.5 : s);
+      zb.rig.group.scale.setScalar(model === 'mutant' ? s / 1.5 : s);
       zb.rig.group.position.set(x, 0, z);
       zb.rig.play('walk', { fade: 0, speed: zb.animSpd });
       if (zb.rig.cur) zb.rig.cur.time = Math.random() * zb.rig.cur.getClip().duration; // 步伐错开
@@ -1096,6 +1256,7 @@ export class Battle {
   }
 
   updateSpawns(dt) {
+    if (this.raid) return; // 夜袭按波次刷怪
     const t = this.t, zi = this.zoneIndex, p = this.p;
     if (this.story) { // 剧情：丧尸少但持续出现，从黑暗里冒出来
       this.spawnAcc += dt * this.story.spawn * (1 + t / 240);
@@ -1176,6 +1337,8 @@ export class Battle {
       win, retreat, zoneIndex: this.zoneIndex, time: this.t, kills: this.kills,
       scrap: Math.floor(this.scrap), rescued: this.rescued, level: this.level, bossKilled: this.bossKilled,
       story: this.story ? this.story.index : null,
+      side: this.story && this.story.side ? this.story.side : null,
+      raid: !!this.raid,
       squad: this.allies.filter(a => !a.npc).map(a => a.name),
       bossName: (this.story && this.story.bossName) || '尸王',
     });
@@ -1267,7 +1430,7 @@ export class Battle {
         D.scale.setScalar(z.s);
         D.updateMatrix();
         zm.setMatrixAt(zi, D.matrix);
-        if (z.flash > 0) c.setRGB(2.6, 2.6, 2.6); else c.setRGB(z.tr, z.tg, z.tb);
+        if (z.flash > 0) c.setRGB(2.6, 2.6, 2.6); else if (z.rage > 0) c.setRGB(1.8, 0.5, 0.5); else c.setRGB(z.tr, z.tg, z.tb);
         zm.setColorAt(zi, c);
         zi++;
       }
@@ -1293,6 +1456,7 @@ export class Battle {
     // 子弹
     i = 0;
     for (const b of this.bullets) {
+      if (b.kind === 'flame') continue;
       D.position.set(b.x, 1.05, b.z);
       D.rotation.set(0, b.ang, 0);
       D.scale.setScalar(1);
@@ -1300,6 +1464,10 @@ export class Battle {
       this.bMesh.setMatrixAt(i++, D.matrix);
     }
     this.bMesh.count = i;
+    i = 0;
+    for (const sp of this.spits) { D.position.set(sp.x, 1.0, sp.z); D.rotation.set(0, 0, 0); D.scale.setScalar(1); D.updateMatrix(); this.sMesh.setMatrixAt(i++, D.matrix); }
+    this.sMesh.count = i;
+    this.sMesh.instanceMatrix.needsUpdate = true;
     this.bMesh.instanceMatrix.needsUpdate = true;
 
     // 经验球

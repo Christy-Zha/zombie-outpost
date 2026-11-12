@@ -13,6 +13,11 @@ import { mergeVertices } from '../../vendor/utils/BufferGeometryUtils.js';
 const loader = new FBXLoader();
 const load = url => new Promise((ok, fail) => loader.load(url, ok, undefined, fail));
 
+// 统一骨骼名前缀（mixamorig1Hips / mixamorig:Hips → mixamorigHips），这样不同角色可以共用动作
+const normBone = n => n.replace(/^mixamorig\d*:?/, 'mixamorig');
+function normalizeBones(root) { root.traverse(o => { if (o.isBone || /^mixamorig/.test(o.name)) o.name = normBone(o.name); }); }
+function normalizeClip(clip) { for (const t of clip.tracks) t.name = normBone(t.name); return clip; }
+
 // 去掉根骨骼的水平位移（防止跑步动画把角色带走），保留上下起伏
 function stripRootMotion(clip) {
   for (const t of clip.tracks) {
@@ -83,13 +88,14 @@ async function simplifyAll(root, target) {
 // files: [{ url, anim }]，第一个文件提供模型本体；maxTex：贴图最大边长
 window.convert = async (files, maxTex = 1024, targetTris = 0) => {
   const base = await load(files[0].url);
+  normalizeBones(base);
   const clips = [];
   for (const f of files) {
     const obj = f === files[0] ? base : await load(f.url);
     const clip = obj.animations[0];
     if (!clip) continue;
     clip.name = f.anim;
-    clips.push(stripRootMotion(clip));
+    clips.push(stripRootMotion(normalizeClip(clip)));
   }
   // 计算身高（用蒙皮后的真实顶点），写进 extras，游戏里据此统一缩放
   base.updateMatrixWorld(true);
@@ -98,6 +104,20 @@ window.convert = async (files, maxTex = 1024, targetTris = 0) => {
   base.userData.footY = box.min.y;
   const trisBefore = countTris(base);
   const tris = await simplifyAll(base, targetTris);
+  // 等大贴图解码完（4K 贴图解码需要时间），解码失败的贴图丢掉
+  const maps = [];
+  base.traverse(o => { if (o.isMesh) for (const m of [].concat(o.material)) if (m.map && !maps.includes(m)) maps.push(m); });
+  window.__badTex = [];
+  // 贴图是后台异步加载的：最多等 30 秒，直到每张贴图的图片都到位
+  for (let i = 0; i < 300 && maps.some(m => m.map && !(m.map.image && m.map.image.width > 0)); i++) await new Promise(r => setTimeout(r, 100));
+  await Promise.all(maps.map(async m => {
+    const img = m.map && m.map.image;
+    try {
+      if (img && img.decode) await img.decode();
+      else if (img && !img.complete && img.addEventListener) await new Promise((ok, no) => { img.addEventListener('load', ok); img.addEventListener('error', no); });
+    } catch { /* 下面检查 */ }
+    if (!img || !(img.width > 0)) { window.__badTex.push(m.name + ' ' + (img && img.src ? img.src.slice(0, 60) : String(img))); m.map = null; }
+  }));
   // 瘦身：游戏里只用颜色贴图，法线/高光等贴图全部去掉；颜色贴图存成 JPEG（有透明的除外）
   base.traverse(o => {
     if (!o.isMesh) return;
@@ -115,7 +135,7 @@ window.convert = async (files, maxTex = 1024, targetTris = 0) => {
   const bytes = new Uint8Array(glb);
   let s = '';
   for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
-  return { b64: btoa(s), tris, trisBefore, height: base.userData.height, anims: clips.map(c => `${c.name}(${c.duration.toFixed(1)}s)`) };
+  return { bad: window.__badTex, b64: btoa(s), tris, trisBefore, height: base.userData.height, anims: clips.map(c => `${c.name}(${c.duration.toFixed(1)}s)`) };
 };
 window.__ready = true;
 </script></body></html>

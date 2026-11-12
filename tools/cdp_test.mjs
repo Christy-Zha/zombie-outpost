@@ -47,7 +47,7 @@ await sleep(2500);
 await shot('01-base');
 
 // 建造几个建筑
-await ev(`__dbg.game.scrap = 2000; __dbg.renderAll(); true`);
+await ev(`__dbg.game.scrap = 2000; __dbg.game.raid.next = 9999; __dbg.renderAll(); true`);
 for (const k of ['farm', 'scrapyard', 'armory', 'hq', 'dorm', 'radio', 'gym', 'clinic', 'armory', 'hq'])
   await ev(`document.querySelector('[data-up="${k}"]').click(); true`);
 await sleep(800);

@@ -21,6 +21,16 @@
 - 难度提高（剧情关摸黑走得慢、搜索/解救要读条、丧尸从前方冒出）
 - **GitHub：公开仓库，但不带 Mixamo 模型**（models/*.glb 在 .gitignore；手机上是方块人物）
 
+## 第四轮（2026-11-12）：真实人物上手机 + 更多剧情玩法
+- 用户要求手机上也是真实人物；选了“模型放私有仓库、自动发布”，并说“自己选推荐的，做好就发布”
+- 发布：私有仓库 Christy-Zha/zombie-outpost-models 放 models/*.glb；公开仓库 .github/workflows/pages.yml 用只读部署钥匙（secret MODELS_DEPLOY_KEY）取模型，组装 _site 发布 Pages（build_type=workflow）
+  - **更新模型流程**：convert_models.mjs → 把 models/*.glb 复制到 D:\MYGithub\zombie-outpost-models 提交推送 → 再推一次本仓库（或手动运行 workflow）触发发布
+- 新角色（只下 1 个动作，其余借 player/zombie 的，见 models.js SHARE_FROM / rotOnly）：c_chen/c_jie/c_min/c_zhou/c_xiao、z_walker2/z_runner/z_exploder/z_spitter/z_screamer/z_armored；启动只加载核心 3 个，其余 ensureModels 按需加载
+- 转换注意：骨骼名统一成 mixamorig 前缀；大贴图异步加载要等；Mixamo 导出 product_name 只能用英文
+- 新玩法：4 种新敌人（data.js ZOMBIES）、3 把新武器（kind: flame/grenade、ammoCost）、炮塔建筑、夜袭（battle.js raid / base.js buildCompound）、剧情选择（对白里的 ['?',提示,选项] 和 {if} 条件台词）+ ENDINGS、支线与好感（js/side.js）、专属技能 PERKS
+- 存档 v5：story.flags/ending/endings、bond、chat、sideDone、perks、raid
+- 测试：tools/extra_test.mjs（夜袭/闲聊/支线）；story_test 会自动选剧情选项
+
 ## 写实场景素材
 - `node tools/env_assets.mjs`：从 Poly Haven 下载 → 减面+清理顶点 → 贴图 512px JPEG，输出 assets/env/*.glb、assets/tex/*.jpg（共约 4MB）
 - js/env.js：`pbr(贴图名)` 写实材质、`prop()` 单个道具、`propInstances()` 批量道具（InstancedMesh）
@@ -32,7 +42,7 @@
 2. `node tools/convert_models.mjs` → 输出 models/*.glb（自动合并动作、去根位移、减面、只留颜色贴图并存 JPEG；三个角色共约 5MB）
 3. 游戏启动时 js/models.js 自动加载 models/*.glb；没有就退回方块人
 - models_src/ 不进 git（Mixamo 条款不允许单独分发原始素材）；models/*.glb 是游戏运行需要的
-- 用户已决定：公开仓库**不带** Mixamo 模型（models/*.glb 已从 git 历史清除）
+- 公开仓库**不带** Mixamo 模型（models/*.glb 已从 git 历史清除），模型在私有仓库，发布时合并
 - 用真实模型时割草模式同屏上限 45 只（battle.js maxZ），剧情模式按章节 maxAlive
 
 ## 关键约定

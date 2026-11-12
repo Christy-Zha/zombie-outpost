@@ -5,11 +5,29 @@ import { GLTFLoader } from '../vendor/GLTFLoader.js';
 import { clone as cloneSkinned } from '../vendor/SkeletonUtils.js';
 
 export const MODELS = {}; // name → { scene, clips, height, footY }
-const NAMES = ['player', 'zombie', 'mutant'];
+const CORE = ['player', 'zombie', 'mutant'];   // 启动时加载
+export const EXTRA = ['c_chen', 'c_jie', 'c_min', 'c_zhou', 'c_xiao', 'z_walker2', 'z_runner', 'z_exploder', 'z_spitter', 'z_screamer', 'z_armored']; // 用到才加载
+const tried = new Set();
+const loader = new GLTFLoader();
 
-export async function loadModels(dir = 'models/') {
-  const loader = new GLTFLoader();
-  await Promise.all(NAMES.map(name => new Promise(done => {
+// 新角色只带 1 个动作，其余动作借用：c_* 借主角的，z_* 借丧尸的
+const SHARE_FROM = n => (n.startsWith('c_') ? 'player' : n.startsWith('z_') ? 'zombie' : null);
+// 借来的动作只保留关节旋转（去掉位置轨道），避免身高不同导致脚浮空或陷地
+// 同时只保留目标角色身上真的有的骨骼（有的丧尸模型没有手指骨）
+const rotCache = new Map();
+function rotOnly(clip, model, bones) {
+  const k = clip.uuid + '|' + model;
+  if (!rotCache.has(k)) rotCache.set(k, new THREE.AnimationClip(clip.name, clip.duration, clip.tracks.filter(t => !t.name.endsWith('.position') && bones.has(t.name.slice(0, t.name.lastIndexOf('.'))))));
+  return rotCache.get(k);
+}
+
+export function loadModels(dir = 'models/') { return ensureModels(CORE, dir); }
+
+// 确保这些模型已加载（已加载/加载失败过的会跳过）
+export async function ensureModels(names, dir = 'models/') {
+  const todo = names.filter(n => !MODELS[n] && !tried.has(n));
+  todo.forEach(n => tried.add(n));
+  await Promise.all(todo.map(name => new Promise(done => {
     loader.load(dir + name + '.glb', gltf => {
       const root = gltf.scene.children[0] || gltf.scene;
       // 转换工具把身高写在 userData 里；万一没有就用包围盒估算
@@ -56,6 +74,12 @@ export class Rig {
     });
     this.mixer = new THREE.AnimationMixer(this.obj);
     this.actions = {};
+    const src = SHARE_FROM(name) && MODELS[SHARE_FROM(name)];
+    if (src) {
+      const bones = new Set();
+      this.obj.traverse(o => bones.add(o.name));
+      for (const [n, clip] of Object.entries(src.clips)) if (!M.clips[n]) this.actions[n] = this.mixer.clipAction(rotOnly(clip, name, bones));
+    }
     for (const [n, clip] of Object.entries(M.clips)) this.actions[n] = this.mixer.clipAction(clip);
     this.cur = null;
     this.flashT = 0;
