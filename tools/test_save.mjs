@@ -72,7 +72,7 @@ assert.equal(mem.getItem(S.SAVE_KEY + '-backup'), '{坏掉的');
 // v1 老存档（没有装备字段）要能正常加载
 mem.setItem(S.SAVE_KEY, JSON.stringify({ v: 1, scrap: 50, buildings: { hq: 2, armory: 1 }, survivors: ['老王'] }));
 const v1 = S.load(mem);
-assert.equal(v1.v, 5);
+assert.equal(v1.v, 6);
 assert.equal(v1.story.stage, 0);
 assert.deepEqual(v1.story.flags, {});
 assert.deepEqual(v1.bag, []);
@@ -120,10 +120,16 @@ const sample = S.makeItem(g, 4, 3);
 console.log('区域5 传说样例:', sample.name, JSON.stringify(sample.stats));
 
 // ---------- v4：剧情按关 / 指挥官 / 武器强化 / 队友 ----------
-// v3 老存档：通关 2 章 → 第 6 关；陈医生、阿杰已加入 → 自动成为可用队友
+// v3 老存档：通关旧 2 章（旧第 6 关）→ v6 换算成新第 13 关（第五章开头，紧跟原第二章=新第四章之后）；陈医生、阿杰已加入 → 自动成为可用队友
 mem.setItem(S.SAVE_KEY, JSON.stringify({ v: 3, scrap: 999, story: { done: 2 }, survivors: ['陈医生', '阿杰', '老王'], buildings: { hq: 4, armory: 3 } }));
 const v3 = S.load(mem);
-assert.equal(v3.story.stage, 6);
+assert.equal(v3.story.stage, 12);
+// v5 → v6 换算：从最后打完的旧章节之后的新章节接着玩；第一章中途不变；全通关 → 45
+assert.deepEqual([0, 1, 2, 3, 4, 8, 9, 14, 15].map(S.oldStageToNew), [0, 1, 2, 3, 3, 12, 21, 30, 45]);
+mem.setItem(S.SAVE_KEY, JSON.stringify({ v: 6, story: { stage: 30, flags: {} } }));
+assert.equal(S.load(mem).story.stage, 30, 'v6 存档不再换算');
+mem.setItem(S.SAVE_KEY, JSON.stringify({ v: 5, story: { stage: 15, flags: { publishData: true }, ending: 'ember', endings: ['ember'] } }));
+assert.equal(S.load(mem).story.stage, 45, 'v5 全通关 → 45 关全通');
 assert.deepEqual(Object.keys(v3.comps).sort(), ['阿杰', '陈医生'].sort());
 assert.equal(v3.cmd.lv, 1);
 
@@ -153,16 +159,16 @@ assert.equal(v3.weaponLv.pistol, 5); // 军械库 3 → 最多到 5
 assert.equal(S.weaponUp(v3, 'pistol').ok, false);
 assert.ok(S.battleStats(v3, 'pistol').dmgMul > d0 * 1.4);
 
-// 剧情按关结算：第 6 关（3-1）首通；队友得经验
+// 剧情按关结算：第 12 关（5-1）首通；队友得经验
 v3.scrap = 0;
-const sr = S.applyResult(v3, { win: true, zoneIndex: 2, time: 200, kills: 80, scrap: 50, rescued: 0, level: 5, story: 6, squad: ['陈医生', '阿杰'] });
+const sr = S.applyResult(v3, { win: true, zoneIndex: 2, time: 200, kills: 80, scrap: 50, rescued: 0, level: 5, story: 12, squad: ['陈医生', '阿杰'] });
 assert.equal(sr.storyFirst, true);
-assert.equal(v3.story.stage, 7);
+assert.equal(v3.story.stage, 13);
 assert.equal(sr.chapterDone, false);
 assert.ok(v3.comps['陈医生'].lv > 1 || v3.comps['陈医生'].xp > 0);
-// 第 8 关（3-3）是本章最后一关：通关后小敏加入并成为队友
-v3.story.stage = 8;
-const sr2 = S.applyResult(v3, { win: true, zoneIndex: 2, time: 200, kills: 10, scrap: 0, rescued: 0, level: 1, story: 8, squad: [] });
+// 第 20 关（7-3 零号病人）是本章最后一关：通关后小敏加入并成为队友
+v3.story.stage = 20;
+const sr2 = S.applyResult(v3, { win: true, zoneIndex: 2, time: 200, kills: 10, scrap: 0, rescued: 0, level: 1, story: 20, squad: [] });
 assert.equal(sr2.chapterDone, true);
 assert.equal(sr2.storyJoin, '小敏');
 assert.ok(v3.comps['小敏']);

@@ -31,6 +31,14 @@
 - 存档 v5：story.flags/ending/endings、bond、chat、sideDone、perks、raid
 - 测试：tools/extra_test.mjs（夜袭/闲聊/支线）；story_test 会自动选剧情选项
 
+## 第五轮（2026-11-12）：主线扩到 15 章
+- 用户嫌剧情短（以为是 15 章，其实原来是 5 章 × 3 关）→ 扩成 15 章 × 3 关 = 45 关
+- 原有 5 章变成新第 1、4、7、10、15 章；新写 10 章（赵师傅、苏青、何院长、唐处长、江雨等新角色）；新选择 keepManifest/blowLine、suStays/suWithUs、witnessHe/judgeHe、saveTang/leftTang、purgeTanks/keepBody；新结局「黎明」= handToArmy + saveTang
+- 存档 v6：旧进度用 save.js `oldStageToNew()` 换算（从最后打完的旧章节之后接着玩，不跳过新章节）
+- 关卡数值按原难度曲线拉伸到 45 关（后期 +10%），章节奖励见各章 reward
+- 主线列表：已通关章节折叠（点标题展开重玩），未解锁只显示下一章
+- sim_story 关卡：1-1、3-3、4-3、7-3、9-3、10-3、13-3、15-3
+
 ## 写实场景素材
 - `node tools/env_assets.mjs`：从 Poly Haven 下载 → 减面+清理顶点 → 贴图 512px JPEG，输出 assets/env/*.glb、assets/tex/*.jpg（共约 4MB）
 - js/env.js：`pbr(贴图名)` 写实材质、`prop()` 单个道具、`propInstances()` 批量道具（InstancedMesh）

@@ -22,7 +22,7 @@ const SETUPS = {
   中期: { b: { hq: 6, armory: 5, gym: 5, clinic: 4, radio: 3 }, w: 'smg', wl: 5, t: { gun: 5, hp: 5, aid: 3, lead: 3 }, squad: [['陈医生', 8], ['阿杰', 8]] },
   后期: { b: { hq: 9, armory: 8, gym: 8, clinic: 7, radio: 6 }, w: 'smg', wl: 9, t: { gun: 9, hp: 9, aid: 6, lead: 8, ammo: 6 }, squad: [['周队长', 15], ['陈医生', 15]] },
 };
-const STAGES = [0, 2, 5, 8, 11, 14]; // 1-1, 1-3, 2-3, 3-3(零号病人), 4-3(秦锋), 5-3(韩振)
+const STAGES = [0, 8, 11, 20, 26, 29, 38, 44]; // 1-1、3-3(孟主任)、4-3、7-3(零号病人)、9-3、10-3(秦锋)、13-3、15-3(韩振)
 
 const code = (setup, stage) => `(async () => {
   const { Battle } = await import('../js/battle.js');

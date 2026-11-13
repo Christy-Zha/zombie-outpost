@@ -34,6 +34,7 @@ sfx.setEnabled(game.sound);
 const baseView = new BaseView();
 baseView.refresh(game);
 let battle = null, mode = 'base', tab = 'build';
+const openCh = new Set(); // 主线列表里展开的已通关章节
 ensureModels(EXTRA.filter(n => n.startsWith('c_'))).then(() => { baseView.resetSurvivors(); baseView.refresh(game); });
 
 // ---------- 小工具 ----------
@@ -179,17 +180,22 @@ function renderGo() {
           <div class="zone-meta">${TYPE[stg.type]} · ${done ? `重玩 🔩${Math.round(full * 0.25)}` : `🔩${full}${si === c.stages.length - 1 && c.reward.survivor ? ` · 「${c.reward.survivor}」加入` : ''}`}</div></div>
         ${locked ? '' : '<span class="zone-go">进入</span>'}</div>`;
     }).join('');
-    const doneAll = game.story.stage >= gi, open = game.story.stage >= first;
-    return `<div class="chapter ${open ? '' : 'locked'}"><div class="ch-title">${doneAll ? '✅' : open ? '📖' : '🔒'} ${c.title}</div>${open ? rows : '<div class="muted" style="padding:4px 2px 8px">完成上一章解锁</div>'}</div>`;
+    const doneAll = game.story.stage >= gi, open = game.story.stage >= first, ci = CHAPTERS.indexOf(c);
+    // 已通关的章节默认折叠（点标题展开重玩）；没解锁的只显示下一章
+    if (!open) return game.story.stage >= first - CHAPTERS[ci - 1].stages.length // 只显示紧挨着的下一章
+      ? `<div class="chapter locked"><div class="ch-title">🔒 ${c.title}</div><div class="muted" style="padding:4px 2px 8px">完成上一章解锁</div></div>` : '';
+    const show = !doneAll || openCh.has(ci);
+    return `<div class="chapter"><div class="ch-title" ${doneAll ? `data-chtoggle="${ci}"` : ''}>${doneAll ? '✅' : '📖'} ${c.title}${doneAll ? `<small class="muted"> ${show ? '▲ 收起' : '▼ 重玩'}</small>` : ''}</div>${show ? rows : ''}</div>`;
   }).join('');
   const total = gi;
+  const left = CHAPTERS.filter((c, k) => CHAPTERS.slice(0, k).reduce((n, x) => n + x.stages.length, 0) > game.story.stage).length - 1;
   const squad = S.unlockedComps(game).map(nm => `<button class="sq ${game.squad.includes(nm) ? 'sel' : ''}" data-squad="${nm}">${COMPANIONS[nm].icon} ${nm}<small>Lv${game.comps[nm].lv}</small></button>`).join('');
   $('tab-go').innerHTML = `
     <div class="section-title">① 选择武器</div><div class="weapons">${weaps}</div>
     <div class="section-title">② 带队友（最多 ${SQUAD_MAX} 人）</div>
     <div class="squad">${squad || '<span class="muted">推进剧情解锁队友</span>'}</div>
     <div class="stat-line">攻击 ×${st.dmgMul.toFixed(2)} · 生命 ${st.maxHp} · 回血 ${st.regen.toFixed(1)}/秒 · 武器 Lv${game.weaponLv[game.weapon] || 0}</div>
-    <div class="section-title">③ 📖 主线剧情《启明之殇》 ${game.story.stage}/${total} 关</div>${chapters}
+    <div class="section-title">③ 📖 主线剧情《启明之殇》 ${game.story.stage}/${total} 关</div>${chapters}${left > 0 ? `<div class="muted" style="padding:2px 4px 10px">……后面还有 ${left} 章</div>` : ''}
     <div class="section-title">④ ☠️ 自由出征（坚持 ${BATTLE_TIME / 60} 分钟撤离，刷物资和装备）</div>${zones}`;
 }
 
@@ -330,6 +336,8 @@ $('tab-people').addEventListener('click', e => {
 
 $('tab-go').addEventListener('click', e => {
   if ((e.target.closest('[data-zone]') || e.target.closest('[data-stage]')) && S.raidDue(game)) { toast('⚠️ 尸潮要来了，先守住据点！'); return; }
+  const cht = e.target.closest('[data-chtoggle]');
+  if (cht) { const k = +cht.dataset.chtoggle; openCh.has(k) ? openCh.delete(k) : openCh.add(k); renderTab(); return; }
   const stg = e.target.closest('[data-stage]');
   if (stg) {
     const i = +stg.dataset.stage;

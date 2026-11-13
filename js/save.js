@@ -41,6 +41,16 @@ export function defaultSave(now = Date.now()) {
   };
 }
 
+// v5 → v6：原来 5 章分别变成新的第 1、4、7、10、15 章
+// 从最后打完的旧章节之后接着玩（这样不会跳过新写的章节）；旧章节中途打过的 1~2 关以后重打
+// 旧版全通关的玩家直接算全通关（已经看过结局，新章节可以在列表里重玩）
+const OLD_CH = [0, 3, 6, 9, 14];
+export function oldStageToNew(i) {
+  if (i >= 15) return 45;
+  const c = Math.floor(i / 3);
+  return c === 0 ? i : (OLD_CH[c - 1] + 1) * 3;
+}
+
 // 旧存档兼容：缺的字段用默认值补上，未来改版也在这里处理
 export function migrate(d, now = Date.now()) {
   const def = defaultSave(now);
@@ -61,6 +71,7 @@ export function migrate(d, now = Date.now()) {
   const st = d.story || {};
   const total = CHAPTERS.reduce((n, c) => n + c.stages.length, 0);
   s.story = { stage: typeof st.stage === 'number' ? st.stage : (st.done | 0) * 3, flags: { ...(st.flags || {}) }, ending: st.ending || null, endings: Array.isArray(st.endings) ? st.endings : [] };
+  if ((d.v | 0) < 6) s.story.stage = oldStageToNew(s.story.stage | 0);
   s.story.stage = Math.max(0, Math.min(total, s.story.stage | 0));
   // v4：指挥官 / 武器强化 / 队友
   s.cmd = { ...def.cmd, ...(d.cmd || {}) };
