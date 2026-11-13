@@ -522,7 +522,7 @@ export class Battle {
             const pc = (w.pierce || 0) + (a.perks.has('min_pierce') ? 2 : 0);
             this.bullets.push({ x: a.x + Math.sin(ang) * 0.6, z: a.z + Math.cos(ang) * 0.6, vx: Math.sin(ang) * sp, vz: Math.cos(ang) * sp, ang, life: w.range / sp + 0.1, pierce: pc, pen: pc > 0, dmg, hits: [], dead: false });
           }
-          sfx.play('smg');
+          sfx.play('ally');
         } else a.fireCd = 0.2;
       }
       // 技能
@@ -706,10 +706,21 @@ export class Battle {
   }
 
   // ---------- 主循环 ----------
+  // 离玩家越远声音越小
+  earVol(o) { return clamp(1 - Math.hypot(o.x - this.p.x, o.z - this.p.z) / 24, 0.15, 1); }
+
   update(dt) {
     if (this.over || this.paused) return;
     this.t += dt;
     const p = this.p;
+
+    // 丧尸吼叫：场上越多，叫得越频繁
+    this.groanT = (this.groanT ?? 1.5) - dt;
+    if (this.groanT <= 0 && this.zs.length) {
+      const z = this.zs[Math.floor(Math.random() * this.zs.length)];
+      if (!z.dead) sfx.play('groan', this.earVol(z) * 0.9);
+      this.groanT = 3.2 / Math.sqrt(1 + this.zs.length / 5) + Math.random();
+    }
 
     // 移动
     let ix = this.input.x, iz = this.input.z;
@@ -887,12 +898,13 @@ export class Battle {
             const sp = 9;
             if (this.spits.length < 120) this.spits.push({ x: z.x, z: z.z, vx: dx * sp, vz: dz * sp, life: 2.2, dmg: z.def.spit * z.dmgMul });
             if (z.rig && z.rig.has('attack')) z.rig.play('attack', { speed: 1.6 });
+            sfx.play('spit', this.earVol(z));
           } else if (z.type === 'screamer') {
             z.cd = 7;
             let n = 0;
             for (const o of this.zs) if (!o.dead && o !== z && (o.x - z.x) ** 2 + (o.z - z.z) ** 2 < 81) { o.rage = 5; n++; }
             this.burst(z.x, 1.6, z.z, 24, 0xff3050, 6, 0.14);
-            sfx.play('boss');
+            sfx.play('scream', this.earVol(z));
             if (!this.screamMsg) { this.screamMsg = true; this.cb.onMsg('😱 尖叫者让尸群狂暴了！先打它！'); }
           }
         }

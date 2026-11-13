@@ -19,9 +19,9 @@ export const WEAPONS = {
   shotgun: { name: '霰弹枪',   icon: '💥', dmg: 9,  rate: 1.15, speed: 24, count: 5, spread: 0.6, jitter: 0.1,  life: 0.4,  range: 9,  pierce: 0, armory: 2, color: 0xffa94d, sound: 'shotgun', desc: '近距离一喷一片' },
   smg:     { name: '冲锋枪',   icon: '🔥', dmg: 6,  rate: 8.0, speed: 28, count: 1, spread: 0,   jitter: 0.22, life: 0.55, range: 14, pierce: 0, armory: 4, color: 0x8fd3ff, sound: 'smg',     desc: '弹雨压制' },
   rifle:   { name: '狙击步枪', icon: '🎯', dmg: 45, rate: 1.25, speed: 42, count: 1, spread: 0,  jitter: 0,    life: 0.6,  range: 22, pierce: 3, armory: 6, color: 0xff7a6b, sound: 'rifle',   desc: '一枪穿一串' },
-  crossbow: { name: '弩',      icon: '🏹', dmg: 58, rate: 1.0, speed: 34, count: 1, spread: 0,   jitter: 0,    life: 0.62, range: 20, pierce: 6, armory: 3, color: 0xd9c27a, sound: 'shot',    desc: '安静的重箭，能穿透一整排' },
+  crossbow: { name: '弩',      icon: '🏹', dmg: 58, rate: 1.0, speed: 34, count: 1, spread: 0,   jitter: 0,    life: 0.62, range: 20, pierce: 6, armory: 3, color: 0xd9c27a, sound: 'bow',    desc: '安静的重箭，能穿透一整排' },
   flamer:   { name: '喷火器',  icon: '🔥', dmg: 4,  rate: 14,  speed: 13, count: 2, spread: 0.45, jitter: 0.15, life: 0.55, range: 7,  pierce: 99, armory: 5, color: 0xff7a1a, sound: 'fire', kind: 'flame', ammoCost: 0.35, desc: '近距离烧穿一大片' },
-  launcher: { name: '榴弹发射器', icon: '💣', dmg: 70, rate: 0.9, speed: 18, count: 1, spread: 0,  jitter: 0.04, life: 0.95, range: 16, pierce: 0, armory: 8, color: 0x9fd36a, sound: 'boom', kind: 'grenade', ammoCost: 3, blast: 3.2, desc: '落地爆炸，范围杀伤' },
+  launcher: { name: '榴弹发射器', icon: '💣', dmg: 70, rate: 0.9, speed: 18, count: 1, spread: 0,  jitter: 0.04, life: 0.95, range: 16, pierce: 0, armory: 8, color: 0x9fd36a, sound: 'launch', kind: 'grenade', ammoCost: 3, blast: 3.2, desc: '落地爆炸，范围杀伤' },
 };
 
 // 丧尸种类：from = 开局多少秒后开始出现；scrapP = 掉物资概率；scrapN = 掉落数量

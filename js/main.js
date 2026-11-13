@@ -34,6 +34,7 @@ sfx.setEnabled(game.sound);
 const baseView = new BaseView();
 baseView.refresh(game);
 let battle = null, mode = 'base', tab = 'build';
+sfx.ambient('base'); // 第一次点屏幕后开始播放据点背景音
 const openCh = new Set(); // 主线列表里展开的已通关章节
 ensureModels(EXTRA.filter(n => n.startsWith('c_'))).then(() => { baseView.resetSurvivors(); baseView.refresh(game); });
 
@@ -429,6 +430,7 @@ function nextLine() {
   dlg.typing = setInterval(() => {
     n += 1;
     textEl.textContent = text.slice(0, n);
+    if (n % 3 === 1) sfx.play('type');
     if (n >= text.length) { clearInterval(dlg.typing); dlg.typing = null; }
   }, 35);
 }
@@ -503,6 +505,7 @@ async function startBattle({ stage = null, side = null, raid = false } = {}) {
   $('hObj').classList.toggle('hidden', !story && !raid);
   battle.resize(innerWidth, innerHeight);
   mode = 'battle';
+  sfx.ambient(story || raid ? 'night' : 'battle');
   $('baseUI').classList.add('hidden');
   $('battleUI').classList.remove('hidden');
   $('bossBar').classList.add('hidden');
@@ -516,6 +519,7 @@ function goHome() {
   if (battle) { battle.dispose(); battle = null; }
   releaseJoy();
   mode = 'base';
+  sfx.ambient('base');
   $('battleUI').classList.add('hidden');
   $('baseUI').classList.remove('hidden');
   baseView.refresh(game);
@@ -557,6 +561,7 @@ function onMsg(text) {
 let radioTimer = 0;
 function onRadio(who, text) {
   const el = $('hRadio');
+  sfx.play('radio');
   el.innerHTML = `<b style="color:${(CAST[who] && CAST[who].color) || '#fff'}">${who || '旁白'}</b>　${text}`;
   el.classList.add('show');
   clearTimeout(radioTimer);
@@ -718,7 +723,6 @@ function resize() {
 }
 addEventListener('resize', resize);
 addEventListener('orientationchange', () => setTimeout(resize, 200));
-document.addEventListener('pointerdown', () => sfx.unlock());
 document.addEventListener('gesturestart', e => e.preventDefault()); // 禁止双指缩放
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) { pauseBattle(); S.tick(game, Date.now()); save(); }
@@ -773,7 +777,7 @@ const gainS = Math.floor(game.store.scrap - before.scrap), gainF = Math.floor(ga
 if (gainS + gainF > 0) setTimeout(() => toast(`离开期间仓库存了 🔩${gainS} 🌽${gainF}`), 600);
 
 // 调试入口：只有网址带 #debug 时才开放，用于自动化测试
-if (location.hash === '#debug') window.__dbg = { get battle() { return battle; }, get game() { return game; }, renderAll, startBattle, models: loadedModels };
+if (location.hash === '#debug') window.__dbg = { get battle() { return battle; }, get game() { return game; }, renderAll, startBattle, models: loadedModels, sfx };
 
 // 注册离线缓存（添加到主屏幕后断网也能玩）
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
